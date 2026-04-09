@@ -65,3 +65,6 @@ htmlcov/
 # pip
 pip-log.txt
 pip-delete-this-directory.txt
+
+# AI/IDE Cache
+.qwen/
