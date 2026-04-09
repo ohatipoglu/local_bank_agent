@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Banka Çağrı Merkezi AI Asistanı</title>
+    <!-- Google Fonts ve İkonlar -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #1e88e5;
+            --primary-hover: #1565c0;
+            --success-color: #4caf50;
+            --success-hover: #43a047;
+            --danger-color: #f44336;
+            --danger-hover: #e53935;
+            --bg-color: #f0f2f5;
+            --text-color: #333;
+            --box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+            --warning-color: #ff9800;
+            --warning-hover: #f57c00;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: var(--text-color);
+        }
+
+        .main-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 90%;
+            max-width: 550px;
+        }
+
+        .header-logo {
+            text-align: center;
+            margin-bottom: -10px;
+        }
+
+        .header-logo span {
+            font-size: 48px;
+            color: var(--primary-color);
+        }
+
+        .container {
+            background-color: #fff;
+            border-radius: 16px;
+            box-shadow: var(--box-shadow);
+            padding: 30px 40px;
+            text-align: center;
+            position: relative;
+        }
+
+        h2 {
+            margin-top: 10px;
+            color: var(--primary-color);
+            font-weight: 500;
+            font-size: 24px;
+        }
+
+        .status {
+            margin: 15px 0;
+            font-size: 15px;
+            color: #666;
+            min-height: 22px;
+            font-weight: 400;
+        }
+
+        /* Model Secimi Dropdown Alani */
+        .model-selector {
+            margin: 0 0 15px 0;
+            text-align: right;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .model-selector label {
+            font-size: 12px;
+            font-weight: 500;
+            color: #666;
+        }
+
+        .model-selector select {
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid #ddd;
+            background-color: #fff;
+            color: var(--primary-color);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .model-selector select:hover {
+            border-color: var(--primary-color);
+        }
+
+        .slider-container {
+            margin: 15px 0 25px 0;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid #e9ecef;
+            text-align: left;
+        }
+
+        .slider-container label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            font-weight: 500;
+            color: #495057;
+            margin-bottom: 10px;
+        }
+
+        #sliderValue {
+            color: var(--primary-color);
+            font-weight: 700;
+            background: #e3f2fd;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 20px;
+            width: 20px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            cursor: pointer;
+            margin-top: -8px;
+            box-shadow: 0 2px 6px rgba(30, 136, 229, 0.4);
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #dee2e6;
+            border-radius: 3px;
+        }
+
+        .slider-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #adb5bd;
+            margin-top: 8px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        /* Ses Dalgaları Animasyonu */
+        .waves {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            height: 60px;
+            margin-bottom: 20px;
+        }
+
+        .wave {
+            width: 6px;
+            height: 10px;
+            background-color: var(--primary-color);
+            margin: 0 4px;
+            border-radius: 5px;
+            animation: bounce 1.2s infinite ease-in-out;
+        }
+
+        .wave:nth-child(2) { animation-delay: 0.1s; }
+        .wave:nth-child(3) { animation-delay: 0.2s; }
+        .wave:nth-child(4) { animation-delay: 0.3s; }
+        .wave:nth-child(5) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+            0%, 100% { height: 12px; opacity: 0.5;}
+            50% { height: 48px; opacity: 1;}
+        }
+
+        /* Kontrol Butonları (Yan yana) */
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .btn-circle {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            border: none;
+            color: white;
+            font-size: 32px;
+            cursor: pointer;
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            outline: none;
+        }
+
+        .btn-circle .material-icons {
+            font-size: 36px;
+        }
+
+        .btn-start {
+            background-color: var(--success-color);
+        }
+
+        .btn-start:hover {
+            background-color: var(--success-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(76, 175, 80, 0.3);
+        }
+
+        .btn-start:active {
+            transform: translateY(1px);
+        }
+
+        .btn-stop {
+            background-color: var(--danger-color);
+            display: none;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.4); }
+            70% { box-shadow: 0 0 0 15px rgba(244, 67, 54, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0); }
+        }
+
+        .btn-stop:hover {
+            background-color: var(--danger-hover);
+            transform: scale(1.05);
+            animation: none;
+        }
+
+        /* Yeni: Görüşmeyi Sıfırlama Butonu */
+        .btn-reset {
+            background-color: var(--warning-color);
+            width: 50px;
+            height: 50px;
+            margin-top: 11px;
+        }
+
+        .btn-reset:hover {
+            background-color: var(--warning-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 152, 0, 0.3);
+        }
+
+        .btn-reset .material-icons {
+            font-size: 24px;
+        }
+
+        /* Konuşma Geçmişi (Log Kutusu) */
+        .chat-box {
+            margin-top: 15px;
+            text-align: left;
+            background: #fff;
+            padding: 15px 20px;
+            border-radius: 12px;
+            height: 180px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+            font-size: 14px;
+            line-height: 1.6;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .chat-box::-webkit-scrollbar {
+            width: 6px;
+        }
+        .chat-box::-webkit-scrollbar-thumb {
+            background: #ccc;
+            border-radius: 3px;
+        }
+
+        .msg {
+            padding: 10px 14px;
+            border-radius: 12px;
+            max-width: 85%;
+            word-wrap: break-word;
+        }
+
+        .msg-user {
+            background-color: #e3f2fd;
+            color: #0d47a1;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg-ai {
+            background-color: #f1f8e9;
+            color: #1b5e20;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg b {
+            display: block;
+            font-size: 12px;
+            margin-bottom: 4px;
+            opacity: 0.8;
+        }
+
+        /* Yeni: Teknik Aktivite Monitörü */
+        .activity-monitor {
+            background-color: #263238;
+            color: #69f0ae;
+            border-radius: 12px;
+            padding: 16px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 12px;
+            height: 100px;
+            overflow-y: auto;
+            text-align: left;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .activity-monitor::-webkit-scrollbar {
+            width: 4px;
+        }
+        .activity-monitor::-webkit-scrollbar-thumb {
+            background: #546e7a;
+            border-radius: 2px;
+        }
+
+        .activity-monitor span {
+            display: block;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding-bottom: 4px;
+            line-height: 1.4;
+        }
+
+        .activity-monitor .error {
+            color: #ff5252;
+            font-weight: bold;
+        }
+
+        .activity-monitor .warning {
+            color: #ffd54f;
+        }
+
+        .activity-monitor .info {
+            color: #4fc3f7;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="main-wrapper">
+    <div class="header-logo">
+        <span class="material-icons">support_agent</span>
+    </div>
+
+    <div class="model-selector" id="modelSelectorContainer">
+        <label for="modelSelect">Aktif Yapay Zeka Modeli:</label>
+        <select id="modelSelect">
+            <option value="gemma4:e4b">Yükleniyor...</option>
+        </select>
+    </div>
+
+    <div class="container">
+        <h2>Dijital Banka Asistanı</h2>
+
+        <!-- Esneklik (Strictness) Ayarı -->
+        <div class="slider-container">
+            <label for="strictnessSlider">
+                <span>Asistan Karakteri</span>
+                <span id="sliderValue">3 (Dengeli)</span>
+            </label>
+            <input type="range" id="strictnessSlider" min="1" max="5" value="3" oninput="updateSliderText(this.value)">
+            <div class="slider-labels">
+                <span>Sohbet & Bilgi</span>
+                <span>Sadece İşlem</span>
+            </div>
+        </div>
+
+        <!-- Animasyon -->
+        <div class="waves" id="waves">
+            <div class="wave"></div>
+            <div class="wave"></div>
+            <div class="wave"></div>
+            <div class="wave"></div>
+            <div class="wave"></div>
+        </div>
+
+        <!-- Durum Metni -->
+        <div class="status" id="statusText">Yardımcı olmaya hazırım. Başlamak için butona basın.</div>
+
+        <!-- Kontroller -->
+        <div class="controls">
+            <!-- Görüşmeyi Sıfırla (Yeni Session) -->
+            <button class="btn-circle btn-reset" id="resetBtn" onclick="resetSession()" title="Görüşmeyi Sıfırla (Yeni Müşteri)">
+                <span class="material-icons">refresh</span>
+            </button>
+
+            <button class="btn-circle btn-start" id="startBtn" onclick="startRecording()" title="Konuşmaya Başla">
+                <span class="material-icons">mic</span>
+            </button>
+
+            <button class="btn-circle btn-stop" id="stopBtn" onclick="stopRecording()" title="Konuşmayı Bitir">
+                <span class="material-icons">stop</span>
+            </button>
+        </div>
+
+        <!-- Yazılı Transkript (Log) -->
+        <div class="chat-box" id="chatBox">
+            <div class="msg msg-ai">
+                <b>Asistan</b>
+                Merhaba, size bankacılık işlemlerinizde nasıl yardımcı olabilirim?
+            </div>
+        </div>
+    </div>
+
+    <!-- Aktivite / Terminal Monitörü -->
+    <div class="activity-monitor" id="activityMonitor">
+        <span class="info">[SYSTEM] Arayüz yüklendi. Modellere bakılıyor...</span>
+    </div>
+</div>
+
+<script>
+    let mediaRecorder;
+    let audioChunks = [];
+    let silenceTimer;
+    let analyser;
+    let microphoneStream;
+
+    // Her yeni sekme açıldığında benzersiz bir session ID oluşturulur
+    let currentSessionId = generateUUID();
+
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const waves = document.getElementById("waves");
+    const statusText = document.getElementById("statusText");
+    const chatBox = document.getElementById("chatBox");
+    const activityMonitor = document.getElementById("activityMonitor");
+    const modelSelect = document.getElementById("modelSelect");
+
+    // UUID (Benzersiz Oturum Kimliği) Üretici
+    function generateUUID() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    // Sayfa yüklendiğinde Ollama modellerini getir
+    window.addEventListener('DOMContentLoaded', fetchOllamaModels);
+
+    async function fetchOllamaModels() {
+        try {
+            logActivity("Sunucudan Ollama modelleri isteniyor...", "info");
+            const response = await fetch("/api/models");
+            const data = await response.json();
+
+            if (data.status === "success" || data.models.length > 0) {
+                modelSelect.innerHTML = "";
+                data.models.forEach(model => {
+                    const option = document.createElement("option");
+                    option.value = model;
+                    option.text = model;
+                    modelSelect.appendChild(option);
+                });
+                logActivity(`Modeller yüklendi: ${data.models.join(', ')}`, "success");
+            } else {
+                logActivity("Model listesi alınırken hata oluştu.", "error");
+            }
+        } catch (error) {
+            logActivity("API'ye ulaşılamadı. Yerel model çalışacak.", "warning");
+        }
+    }
+
+    // Yeni bir görüşme başlatmak için Session ID'yi sıfırla
+    function resetSession() {
+        currentSessionId = generateUUID(); // Yeni ID oluştur
+
+        // Chat kutusunu temizle ve ilk mesajı koy
+        chatBox.innerHTML = `
+            <div class="msg msg-ai">
+                <b>Asistan</b>
+                Merhaba, ben yeni bir asistanım. Size nasıl yardımcı olabilirim?
+            </div>`;
+
+        logActivity(`Görüşme sıfırlandı. Yeni Oturum Kimliği: ${currentSessionId.substring(0,8)}...`, "warning");
+        statusText.innerText = "Hafıza sıfırlandı. Yeni müşteri bekleniyor.";
+        statusText.style.color = "#ff9800";
+    }
+
+    function updateSliderText(val) {
+        const labels = [
+            "1 (Finansal Danışman)",
+            "2 (Bilgi Verici)",
+            "3 (Dengeli)",
+            "4 (Kuralcı)",
+            "5 (Robotik)"
+        ];
+        document.getElementById("sliderValue").innerText = labels[val - 1];
+    }
+
+    function logActivity(message, type = "normal") {
+        const time = new Date().toLocaleTimeString('tr-TR', { hour12: false });
+        let classStr = "";
+        if (type === "error") classStr = 'class="error"';
+        else if (type === "warning") classStr = 'class="warning"';
+        else if (type === "info" || type === "success") classStr = 'class="info"';
+
+        activityMonitor.innerHTML += `<span ${classStr}>[${time}] ${message}</span>`;
+        activityMonitor.scrollTop = activityMonitor.scrollHeight;
+    }
+
+    async function startRecording() {
+        logActivity("Mikrofon erişimi isteniyor...", "info");
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            logActivity("Mikrofon izni alındı. VAD başlatılıyor...");
+
+            const audioContext = new AudioContext();
+            microphoneStream = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 512;
+            microphoneStream.connect(analyser);
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                sendAudioToServer();
+            };
+
+            mediaRecorder.start();
+            logActivity("Kayıt başlatıldı. Ses algılanıyor...", "info");
+
+            startBtn.style.display = "none";
+            stopBtn.style.display = "flex";
+            resetBtn.style.display = "none"; // Kayıt sırasında sıfırlama butonunu gizle
+            waves.style.display = "flex";
+            statusText.innerText = "Sizi dinliyorum...";
+            statusText.style.color = "#1e88e5";
+
+            detectSilence(dataArray, analyser);
+
+        } catch (err) {
+            logActivity("Hata: Mikrofon erişimi reddedildi veya bulunamadı.", "error");
+            alert("Mikrofon erişimi gerekli.");
+        }
+    }
+
+    function detectSilence(dataArray, analyser) {
+        if(mediaRecorder.state !== "recording") return;
+
+        analyser.getByteFrequencyData(dataArray);
+
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+        }
+        let average = sum / dataArray.length;
+
+        if (average < 15) {
+            if (!silenceTimer) {
+                silenceTimer = setTimeout(() => {
+                    if(mediaRecorder.state === "recording") {
+                        logActivity("Sessizlik algılandı (1.5sn). Kayıt tamamlanıyor...", "warning");
+                        stopRecording();
+                    }
+                }, 1500);
+            }
+        } else {
+            if (silenceTimer) {
+                clearTimeout(silenceTimer);
+                silenceTimer = null;
+            }
+        }
+        requestAnimationFrame(() => detectSilence(dataArray, analyser));
+    }
+
+    function stopRecording() {
+        if (mediaRecorder && mediaRecorder.state === "recording") {
+            mediaRecorder.stop();
+            mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            logActivity("Mikrofon donanımı serbest bırakıldı.");
+        }
+
+        if (silenceTimer) {
+            clearTimeout(silenceTimer);
+            silenceTimer = null;
+        }
+
+        stopBtn.style.display = "none";
+        waves.style.display = "flex";
+        waves.style.opacity = "0.3";
+        waves.style.filter = "grayscale(100%)";
+        statusText.innerText = "İşleniyor, lütfen bekleyin...";
+        statusText.style.color = "#ff9800";
+    }
+
+    async function sendAudioToServer() {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        const strictnessLevel = document.getElementById("strictnessSlider").value;
+        const selectedModel = document.getElementById("modelSelect").value;
+
+        const formData = new FormData();
+        formData.append("audio", audioBlob, "user_voice.wav");
+        formData.append("strictness", strictnessLevel);
+        formData.append("model_name", selectedModel);
+        formData.append("session_id", currentSessionId); // Benzersiz oturum kimliğini gönder
+
+        logActivity(`Sunucuya istek gönderiliyor... (Model: ${selectedModel}, Session: ${currentSessionId.substring(0,8)})`, "info");
+
+        let reqStartTime = Date.now();
+
+        try {
+            const response = await fetch("/process_audio", {
+                method: "POST",
+                body: formData
+            });
+
+            const data = await response.json();
+            let reqEndTime = Date.now();
+            let reqDuration = ((reqEndTime - reqStartTime) / 1000).toFixed(2);
+
+            if (data.status === "success") {
+                logActivity(`İşlem Başarılı. (Süre: ${reqDuration}s)`, "info");
+                logActivity(`STT: "${data.user_text}"`);
+
+                chatBox.innerHTML += `
+                    <div class="msg msg-user">
+                        <b>Siz</b>
+                        ${data.user_text}
+                    </div>`;
+
+                chatBox.innerHTML += `
+                    <div class="msg msg-ai">
+                        <b>Asistan (${selectedModel})</b>
+                        ${data.ai_text}
+                    </div>`;
+                chatBox.scrollTop = chatBox.scrollHeight;
+
+                statusText.innerText = "Asistan yanıtlıyor...";
+                statusText.style.color = "#4caf50";
+
+                waves.style.opacity = "1";
+                waves.style.filter = "none";
+
+                const audioUrl = "data:audio/wav;base64," + data.audio_base64;
+                const audio = new Audio(audioUrl);
+                audio.play();
+
+                audio.onended = () => {
+                    logActivity("Ses oynatma tamamlandı.");
+                    resetUI();
+                };
+            } else {
+                logActivity(`Sunucu Hatası: ${data.message}`, "error");
+                alert("İşlem sırasında hata oluştu.");
+                resetUI();
+            }
+
+        } catch (err) {
+            logActivity(`Bağlantı Hatası: ${err.message}`, "error");
+            resetUI();
+        }
+    }
+
+    function resetUI() {
+        waves.style.display = "none";
+        waves.style.opacity = "1";
+        waves.style.filter = "none";
+        startBtn.style.display = "flex";
+        resetBtn.style.display = "flex"; // Arayüz normale döndüğünde sıfırlama butonunu geri getir
+        statusText.innerText = "Yeni bir işlem için butona basın.";
+        statusText.style.color = "#666";
+    }
+</script>
+
+</body>
+</html>

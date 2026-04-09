@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.egg-info/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Credentials & Secrets (CRITICAL: Never commit these)
+*.json
+!package.json
+local-bank-tts-*.json
+service-account*.json
+.env
+.env.local
+.env.production
+
+# Database & Logs
+*.db
+*.sqlite
+*.sqlite3
+logs.db
+
+# Temporary Files
+*.wav
+*.mp3
+*.ogg
+temp_*.wav
+web_temp_*
+web_response_*
+piper_output_*
+google_output_*
+temp_audio_*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (Large files)
+models/*.onnx
+models/*.bin
+
+# Build output
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
