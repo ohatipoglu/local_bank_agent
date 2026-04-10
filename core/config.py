@@ -72,6 +72,21 @@ class Config:
         str(Path(__file__).parent.parent / "models" / "tr_TR-dfki-medium.onnx")
     )
 
+    # Coqui XTTS v2 (local, high-quality Turkish TTS with GPU support)
+    # Note: Requires manual installation - see COQUI_INSTALL_GUIDE.md
+    TTS_ENABLE_COQUI_FALLBACK: bool = os.getenv("TTS_ENABLE_COQUI_FALLBACK", "false").lower() == "true"
+    COQUI_MODEL_NAME: str = os.getenv("COQUI_MODEL_NAME", "tts_models/multilingual/multi-dataset/xtts_v2")
+    COQUI_VOICE_REF_AUDIO: str = os.getenv(
+        "COQUI_VOICE_REF_AUDIO",
+        str(Path(__file__).parent.parent / "models" / "coqui_reference.wav")
+    )
+    COQUI_SPEAKER_WAV: str = os.getenv("COQUI_SPEAKER_WAV", "")  # Optional: custom speaker cloning audio
+    COQUI_USE_GPU: bool = os.getenv("COQUI_USE_GPU", "true").lower() == "true"
+
+    # Edge TTS (Microsoft Edge online TTS, free, no API key)
+    TTS_ENABLE_EDGE_FALLBACK: bool = os.getenv("TTS_ENABLE_EDGE_FALLBACK", "true").lower() == "true"
+    EDGE_TTS_VOICE: str = os.getenv("EDGE_TTS_VOICE", "tr-TR-AhmetNeural")
+
     # -----------------------------------------------------------------------
     # Security
     # -----------------------------------------------------------------------
@@ -135,6 +150,8 @@ class Config:
         print(f"  STT Model: {cls.STT_MODEL_SIZE} ({cls.STT_DEVICE})")
         print(f"  TTS Voice: {cls.TTS_VOICE_NAME}")
         print(f"  Piper Fallback: {'Enabled' if cls.TTS_ENABLE_PIPER_FALLBACK else 'Disabled'}")
+        print(f"  Coqui XTTS:   {'Enabled' if cls.TTS_ENABLE_COQUI_FALLBACK else 'Disabled'}")
+        print(f"  Edge TTS:     {'Enabled' if cls.TTS_ENABLE_EDGE_FALLBACK else 'Disabled'}")
         print(f"  Rate Limit: {cls.RATE_LIMIT_REQUESTS} req / {cls.RATE_LIMIT_WINDOW_SECONDS}s")
         print(f"  Max Audio: {cls.MAX_AUDIO_SIZE_MB} MB")
         print("=" * 60 + "\n")

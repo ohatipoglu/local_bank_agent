@@ -8,7 +8,7 @@ Voice-enabled AI banking assistant with natural language processing for Turkish 
 
 - **🎙️ Voice Interface**: Speech-to-Text with Faster-Whisper (Turkish optimized)
 - **🤖 AI Reasoning**: LangGraph ReAct agent with Ollama LLM integration
-- **🔊 Text-to-Speech**: Google Cloud TTS with Piper offline fallback
+- **🔊 Text-to-Speech**: Google Cloud TTS with Piper offline fallback + Coqui XTTS v2 (voice cloning)
 - **🏦 Banking Operations**: Balance inquiry, credit card debt, EFT, Havale
 - **🔐 Session Management**: Secure session handling with customer authentication
 - **📊 Real-time Monitoring**: Web dashboard with activity terminal and log viewer
@@ -51,6 +51,58 @@ To use Google Cloud's high-quality Text-to-Speech voices, you need to configure 
 3. Create a **Service Account** with TTS permissions.
 4. Generate a new **JSON key** and download it to the project root directory.
 5. Set the path in your `.env` file: `GOOGLE_APPLICATION_CREDENTIALS=./your-file-name.json`
+
+### Coqui XTTS v2 Setup (Voice Cloning)
+
+Coqui XTTS v2 provides high-quality, fully offline Turkish speech synthesis with voice cloning capabilities:
+
+**Features:**
+- 🎯 **Voice Cloning**: Replicate any voice from a 6-10 second audio sample
+- 📡 **Fully Offline**: No internet connection required
+- 🇹🇷 **Turkish Support**: Excellent Turkish language model
+- 🔒 **Privacy**: All processing happens locally
+
+**Quick Setup:**
+
+1. **Install TTS in conda environment:**
+   ```bash
+   # Create coqui_env conda environment
+   conda create -n coqui_env python=3.10 -y
+   
+   # Activate and install TTS
+   conda activate coqui_env
+   pip install TTS>=0.20.0
+   ```
+
+2. **Prepare reference voice audio:**
+   - Record 6-10 seconds of clean Turkish speech
+   - Export as WAV format (16-bit, 22050 Hz, mono)
+   - Save as `referans_ses.wav` in project root
+   - The setup will automatically copy it to `models/coqui_reference.wav`
+
+3. **Enable in `.env` file:**
+   ```env
+   TTS_ENABLE_COQUI_FALLBACK=true
+   COQUI_VOICE_REF_AUDIO=./models/coqui_reference.wav
+   COQUI_SPEAKER_WAV=./referans_ses.wav
+   ```
+
+4. **Test the integration:**
+   ```bash
+   python test_coqui_integration.py
+   ```
+
+5. **Start the application:**
+   ```bash
+   python web_server.py
+   ```
+
+6. **Select Coqui XTTS in the web interface:**
+   - Open http://localhost:8000
+   - Choose "Coqui XTTS" from the TTS Engine dropdown
+   - Speak and enjoy high-quality voice cloning!
+
+**Detailed Guide:** See `COQUI_INSTALL_GUIDE.md` for comprehensive setup instructions, troubleshooting, and performance optimization.
 
 ### Installation
 
@@ -207,7 +259,7 @@ Türkçe bankacılık işlemleri için doğal dil işleme özellikli, sesli komu
 
 - **🎙️ Sesli Arayüz**: Faster-Whisper ile Sesten Metne çeviri (Türkçe için optimize edilmiş)
 - **🤖 Yapay Zeka Karar Mekanizması**: Ollama LLM entegrasyonu ile LangGraph ReAct ajanı
-- **🔊 Metinden Sese**: Google Cloud TTS ve yedek olarak (offline) Piper TTS
+- **🔊 Metinden Sese**: Google Cloud TTS, yedek olarak Piper TTS (offline) + Coqui XTTS v2 (ses klonlama)
 - **🏦 Bankacılık İşlemleri**: Bakiye sorgulama, kredi kartı borcu öğrenme, EFT, Havale
 - **🔐 Oturum Yönetimi**: Müşteri kimlik doğrulaması ile güvenli oturum kontrolü
 - **📊 Gerçek Zamanlı İzleme**: Terminal ve log görüntüleme paneli sunan web dashboard

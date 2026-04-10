@@ -10,6 +10,12 @@ jinja2>=3.1.4
 faster-whisper>=1.0.3
 speechrecognition>=3.10.4
 google-cloud-texttospeech>=2.21.0
+edge-tts>=6.1.0
+
+# Coqui TTS (for voice cloning - installed in coqui_env conda environment)
+# Note: The main app uses subprocess to call coqui_env, so TTS is not needed here
+# To install in coqui_env: conda activate coqui_env && pip install TTS>=0.20.0
+# TTS>=0.20.0
 
 # LangChain & Agent Framework
 langchain>=0.3.0

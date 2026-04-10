@@ -30,6 +30,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+# Load environment variables from .env file (must be before Config import)
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        print(f"✅ Loaded environment variables from: {env_path}")
+    else:
+        print("⚠️  .env file not found, using system environment variables")
+except ImportError:
+    print("⚠️  python-dotenv not installed, using system environment variables")
+
 # Suppress noisy warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -48,7 +60,7 @@ from core.security import SecurityMiddleware, RateLimiter, validate_audio_upload
 from core.session_manager import session_manager
 from core.agent_cache import agent_cache
 from infrastructure.mock_services import MockAccountService, MockAuthService
-from infrastructure.tts_engine import TTSFallbackChain
+from infrastructure.tts_engine import TTSFallbackChain, TTSEngineRouter
 from infrastructure.stt_engine import FasterWhisperSTTEngine
 from application.langchain_agent import LangChainBankAgent
 
@@ -111,8 +123,8 @@ log.info("Servisler başlatılıyor...")
 account_service = MockAccountService()
 auth_service = MockAuthService()
 
-# TTS: Use fallback chain (Google Cloud -> Piper)
-tts_engine = TTSFallbackChain(logger=log)
+# TTS: Use engine router (Google Cloud -> Piper -> Coqui XTTS)
+tts_engine = TTSEngineRouter(logger=log)
 
 # STT
 log.info("Whisper modeli yükleniyor...")
@@ -214,6 +226,35 @@ async def get_models():
         }
 
 
+@app.get(
+    "/api/tts_engines",
+    summary="List TTS Engines",
+    description="Retrieve list of available TTS engines with metadata",
+)
+async def get_tts_engines():
+    """
+    List available TTS engines for frontend selection.
+
+    Returns engine metadata including:
+    - name: internal engine identifier
+    - display_name: human-readable name
+    - description: short description
+    - quality: quality level
+    - offline: whether it works offline
+    - type: cloud or local
+    """
+    try:
+        engines = tts_engine.get_available_engines()
+        return {"status": "success", "engines": engines}
+    except Exception as e:
+        log.error(f"TTS Engine Listesi Alınamadı: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "engines": [],
+        }
+
+
 @app.get("/logs", response_class=HTMLResponse)
 async def read_logs(request: Request):
     """Serve log monitoring dashboard."""
@@ -286,9 +327,12 @@ async def health_check():
     # Check TTS
     try:
         engine_count = len(tts_engine.engines)
+        engines_available = list(tts_engine.engines.keys())
         health["components"]["tts"] = {
             "status": "healthy" if engine_count > 0 else "unhealthy",
             "engines_available": engine_count,
+            "engines": engines_available,
+            "default_engine": tts_engine.default_engine_name,
         }
         if engine_count == 0:
             health["status"] = "degraded"
@@ -433,19 +477,21 @@ def _process_audio_sync(
     model_name: str,
     session_id: str,
     customer_id: str = None,
+    tts_engine_name: str = None,
 ) -> dict:
     """
     Synchronous audio processing pipeline.
-    
+
     Flow: STT -> Agent -> TTS
-    
+
     Args:
         temp_audio_path: Path to uploaded audio file
         strictness_level: Agent strictness (1-5)
         model_name: Ollama model to use
         session_id: Session identifier
         customer_id: Verified customer ID (optional)
-        
+        tts_engine_name: TTS engine to use (google, piper, coqui). None = default.
+
     Returns:
         Dictionary with transcription, response, and base64 audio
     """
@@ -471,8 +517,8 @@ def _process_audio_sync(
             customer_id,
         )
 
-        # 4. Text-to-Speech (with fallback chain)
-        output_file = tts_engine.generate_audio(text=ai_response_text)
+        # 4. Text-to-Speech (with engine selection)
+        output_file = tts_engine.generate_audio(text=ai_response_text, engine_name=tts_engine_name)
 
         if not output_file or not os.path.exists(output_file):
             return {
@@ -518,13 +564,14 @@ async def process_audio(
     model_name: str = Form(None),
     session_id: str = Form(None),
     customer_id: str = Form(None),
+    tts_engine: str = Form(None),
 ):
     """
     Process voice input through full STT -> Agent -> TTS pipeline.
-    
+
     Accepts audio file, transcribes it, processes through AI agent
     with banking tools, generates speech response.
-    
+
     Returns JSON with transcription, AI response, and base64-encoded audio.
     """
     # Generate correlation ID for request tracing
@@ -580,6 +627,7 @@ async def process_audio(
             model_name,
             session_id,
             customer_id,
+            tts_engine,
         )
         return result
 

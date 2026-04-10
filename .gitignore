@@ -1,4 +1,6 @@
+# ============================================
 # Python
+# ============================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -8,63 +10,135 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-
-# Virtual Environment
-venv/
-env/
-ENV/
-.venv/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# Credentials & Secrets (CRITICAL: Never commit these)
-*.json
-!package.json
-local-bank-tts-*.json
-service-account*.json
-.env
-.env.local
-.env.production
-
-# Database & Logs
-*.db
-*.sqlite
-*.sqlite3
-logs.db
-
-# Temporary Files
-*.wav
-*.mp3
-*.ogg
-temp_*.wav
-web_temp_*
-web_response_*
-piper_output_*
-google_output_*
-temp_audio_*
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Models (Large files)
-models/*.onnx
-models/*.bin
-
-# Build output
 *.pyc
 .pytest_cache/
 .coverage
 htmlcov/
 
-# pip
+# ============================================
+# Virtual Environments
+# ============================================
+venv/
+env/
+ENV/
+.venv/
+
+# ============================================
+# Credentials & Secrets (CRITICAL: Never commit)
+# ============================================
+.env
+.env.local
+.env.production
+.env.backup
+*.json
+!package.json
+local-bank-tts-*.json
+service-account*.json
+coqui_tts_config.json
+*.pem
+*.key
+*.crt
+
+# ============================================
+# Database & Logs
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+logs.db
+*.log
+application.log
+
+# ============================================
+# Temporary Files
+# ============================================
+*.wav
+*.mp3
+*.ogg
+*.aac
+temp_*.wav
+temp_*.mp3
+web_temp_*
+web_response_*
+piper_output_*
+google_output_*
+temp_audio_*
+gecici*
+test_output.wav
+test_coqui_output.wav
+200_kelimelik_tam_ses.wav
+gecici_cumle_*.wav
+
+# ============================================
+# OS Files
+# ============================================
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+System Volume Information/
+
+# ============================================
+# IDE & Editors
+# ============================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ============================================
+# Models (Large files - use Git LFS if needed)
+# ============================================
+models/*.onnx
+models/*.bin
+models/*.pth
+models/*.pt
+*.ckpt
+
+# ============================================
+# TTS Source Repository (Should NOT be embedded)
+# ============================================
+TTS/
+
+# ============================================
+# Build & Test Output
+# ============================================
 pip-log.txt
 pip-delete-this-directory.txt
+.tox/
+.nox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+*.cover
+.hypothesis/
 
-# AI/IDE Cache
+# ============================================
+# Conda & Package Managers
+# ============================================
+*.yml
+*.yaml
+!environment.yml
+environment.yml
+conda-env.yml
+
+# ============================================
+# AI/IDE Cache & Assistants
+# ============================================
 .qwen/
+.cursor/
+.claude/
+.copilot/
+
+# ============================================
+# GitHub Actions
+# ============================================
+.github/workflows/*.yml
+!.github/workflows/README.md

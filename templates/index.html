@@ -109,6 +109,10 @@
             border-color: var(--primary-color);
         }
 
+        .model-selector select option {
+            padding: 4px 8px;
+        }
+
         .slider-container {
             margin: 15px 0 25px 0;
             background: #f8f9fa;
@@ -392,6 +396,13 @@
         </select>
     </div>
 
+    <div class="model-selector" id="ttsSelectorContainer">
+        <label for="ttsEngineSelect">TTS Motoru:</label>
+        <select id="ttsEngineSelect">
+            <option value="">Yükleniyor...</option>
+        </select>
+    </div>
+
     <div class="container">
         <h2>Dijital Banka Asistanı</h2>
 
@@ -469,6 +480,7 @@
     const chatBox = document.getElementById("chatBox");
     const activityMonitor = document.getElementById("activityMonitor");
     const modelSelect = document.getElementById("modelSelect");
+    const ttsEngineSelect = document.getElementById("ttsEngineSelect");
 
     // UUID (Benzersiz Oturum Kimliği) Üretici
     function generateUUID() {
@@ -478,8 +490,11 @@
         });
     }
 
-    // Sayfa yüklendiğinde Ollama modellerini getir
-    window.addEventListener('DOMContentLoaded', fetchOllamaModels);
+    // Sayfa yüklendiğinde Ollama modellerini ve TTS motorlarını getir
+    window.addEventListener('DOMContentLoaded', () => {
+        fetchOllamaModels();
+        fetchTTSEngines();
+    });
 
     async function fetchOllamaModels() {
         try {
@@ -501,6 +516,37 @@
             }
         } catch (error) {
             logActivity("API'ye ulaşılamadı. Yerel model çalışacak.", "warning");
+        }
+    }
+
+    async function fetchTTSEngines() {
+        try {
+            logActivity("Sunucudan TTS motorları isteniyor...", "info");
+            const response = await fetch("/api/tts_engines");
+            const data = await response.json();
+
+            if (data.status === "success" && data.engines.length > 0) {
+                ttsEngineSelect.innerHTML = "";
+                data.engines.forEach(engine => {
+                    const option = document.createElement("option");
+                    option.value = engine.name;
+                    // Kalite ve offline bilgisi göster
+                    const offlineBadge = engine.offline ? " 📡Çevrimdışı" : " ☁️Bulut";
+                    const qualityBadge = engine.quality === "Çok Yüksek" ? "⭐⭐⭐" :
+                                        engine.quality === "Yüksek" ? "⭐⭐" : "⭐";
+                    option.text = `${engine.display_name} (${qualityBadge}${offlineBadge})`;
+                    option.title = `${engine.description} - Kalite: ${engine.quality}`;
+                    ttsEngineSelect.appendChild(option);
+                });
+                const engineNames = data.engines.map(e => e.display_name).join(', ');
+                logActivity(`TTS motorları yüklendi: ${engineNames}`, "success");
+            } else {
+                logActivity("TTS motor listesi alınamadı.", "error");
+                ttsEngineSelect.innerHTML = '<option value="">Kullanılamıyor</option>';
+            }
+        } catch (error) {
+            logActivity("TTS API'ye ulaşılamadı.", "warning");
+            ttsEngineSelect.innerHTML = '<option value="">Hata</option>';
         }
     }
 
@@ -637,14 +683,16 @@
         const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
         const strictnessLevel = document.getElementById("strictnessSlider").value;
         const selectedModel = document.getElementById("modelSelect").value;
+        const selectedTTSEngine = document.getElementById("ttsEngineSelect").value;
 
         const formData = new FormData();
         formData.append("audio", audioBlob, "user_voice.wav");
         formData.append("strictness", strictnessLevel);
         formData.append("model_name", selectedModel);
         formData.append("session_id", currentSessionId); // Benzersiz oturum kimliğini gönder
+        formData.append("tts_engine", selectedTTSEngine); // Seçilen TTS motoru
 
-        logActivity(`Sunucuya istek gönderiliyor... (Model: ${selectedModel}, Session: ${currentSessionId.substring(0,8)})`, "info");
+        logActivity(`Sunucuya istek gönderiliyor... (Model: ${selectedModel}, TTS: ${selectedTTSEngine || 'varsayılan'}, Session: ${currentSessionId.substring(0,8)})`, "info");
 
         let reqStartTime = Date.now();
 
@@ -670,7 +718,7 @@
 
                 chatBox.innerHTML += `
                     <div class="msg msg-ai">
-                        <b>Asistan (${selectedModel})</b>
+                        <b>Asistan (${selectedModel}) [TTS: ${selectedTTSEngine || 'varsayılan'}]</b>
                         ${data.ai_text}
                     </div>`;
                 chatBox.scrollTop = chatBox.scrollHeight;
