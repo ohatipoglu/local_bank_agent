@@ -4,22 +4,20 @@ Provides Google Cloud TTS (primary), Piper TTS (offline fallback),
 Coqui XTTS v2 (local, high-quality Turkish with GPU support),
 and Edge TTS (Microsoft Edge online TTS, free, no API key).
 """
+
 import os
-import subprocess
-import time
 import re
-import uuid
-import yaml
-import threading
 import shutil
-from typing import Optional
+import subprocess
+import threading
+import time
+import uuid
 
+import yaml
+from google.api_core.exceptions import GoogleAPIError, RetryError, ServiceUnavailable
 from google.cloud import texttospeech
-from google.api_core.exceptions import RetryError, ServiceUnavailable, GoogleAPIError
 
-from core.exceptions import TTSError, TTSClientNotInitializedError
 from core.config import Config
-from core.logger import get_correlated_logger
 
 
 def play_audio_async(file_path: str, logger):
@@ -31,9 +29,11 @@ def play_audio_async(file_path: str, logger):
         file_path: Path to WAV file
         logger: Loguru logger instance
     """
+
     def _play():
         try:
             import winsound
+
             logger.debug(f"Ses oynatılıyor: {file_path}")
             winsound.PlaySound(file_path, winsound.SND_FILENAME)
             logger.debug("Ses oynatma bitti.")
@@ -68,14 +68,12 @@ class TTSEngineBase:
     def _load_replacements(self):
         """Load text replacement rules from prompts.yaml."""
         yaml_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "application",
-            "prompts.yaml"
+            os.path.dirname(os.path.dirname(__file__)), "application", "prompts.yaml"
         )
         self.replacements = {}
         try:
             if os.path.exists(yaml_path):
-                with open(yaml_path, 'r', encoding='utf-8') as file:
+                with open(yaml_path, encoding="utf-8") as file:
                     data = yaml.safe_load(file)
                     self.replacements = data.get("tts_replacements", {})
         except Exception as e:
@@ -86,18 +84,18 @@ class TTSEngineBase:
         # Fallback defaults if YAML not found
         if not self.replacements:
             self.replacements = {
-                r'\bSPK\b': 'se pe ka',
-                r'\bTL\b': 'Türk Lirası',
-                r'\bT.C.\b': 'Te Ce',
-                r'\bTC\b': 'Te Ce',
-                r'\bATM\b': 'a te me',
-                r'\bEFT\b': 'e fe te',
-                r'\bFAST\b': 'fast',
-                r'\bKDV\b': 'ka de ve',
-                r'\bIBAN\b': 'ay ban',
-                r'\bMBS\b': 'me be se',
-                r'\bT\+1\b': 'te artı bir',
-                r'\bT\+2\b': 'te artı iki',
+                r"\bSPK\b": "se pe ka",
+                r"\bTL\b": "Türk Lirası",
+                r"\bT.C.\b": "Te Ce",
+                r"\bTC\b": "Te Ce",
+                r"\bATM\b": "a te me",
+                r"\bEFT\b": "e fe te",
+                r"\bFAST\b": "fast",
+                r"\bKDV\b": "ka de ve",
+                r"\bIBAN\b": "ay ban",
+                r"\bMBS\b": "me be se",
+                r"\bT\+1\b": "te artı bir",
+                r"\bT\+2\b": "te artı iki",
             }
 
     def _preprocess_text(self, text: str) -> str:
@@ -115,7 +113,7 @@ class TTSEngineBase:
             processed_text = re.sub(pattern, replacement, processed_text)
         return processed_text
 
-    def generate_audio(self, text: str) -> Optional[str]:
+    def generate_audio(self, text: str) -> str | None:
         """
         Generate audio from text.
 
@@ -153,12 +151,10 @@ class PiperTTSEngine(TTSEngineBase):
             )
 
         if not os.path.exists(self.model_path):
-            self.logger.error(
-                f"TTS Modeli bulunamadı: {self.model_path}"
-            )
+            self.logger.error(f"TTS Modeli bulunamadı: {self.model_path}")
             self.piper_available = False
 
-    def generate_audio(self, text: str) -> Optional[str]:
+    def generate_audio(self, text: str) -> str | None:
         """
         Generate audio using Piper TTS.
 
@@ -180,17 +176,15 @@ class PiperTTSEngine(TTSEngineBase):
 
         try:
             subprocess.run(
-                ['piper', '--model', self.model_path, '--output_file', output_file],
-                input=normalized_text.encode('utf-8'),
+                ["piper", "--model", self.model_path, "--output_file", output_file],
+                input=normalized_text.encode("utf-8"),
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
 
             elapsed = time.time() - start_time
-            self.logger.info(
-                f"Piper TTS Üretimi Tamamlandı. Süre: {elapsed:.2f}sn"
-            )
+            self.logger.info(f"Piper TTS Üretimi Tamamlandı. Süre: {elapsed:.2f}sn")
             return output_file
 
         except subprocess.CalledProcessError as e:
@@ -254,23 +248,22 @@ class CoquiTTSEngine(TTSEngineBase):
         try:
             # Check conda env exists
             result = subprocess.run(
-                ["conda", "env", "list"],
-                capture_output=True, text=True, timeout=10
+                ["conda", "env", "list"], capture_output=True, text=True, timeout=10
             )
             if self.conda_env in result.stdout:
                 if os.path.exists(self.server_script):
                     self.coqui_available = True
-                    self.logger.info(
-                        f"Coqui XTTS: Ready (env: {self.conda_env})"
-                    )
+                    self.logger.info(f"Coqui XTTS: Ready (env: {self.conda_env})")
                 else:
-                    self.logger.error(f"Coqui server script not found: {self.server_script}")
+                    self.logger.error(
+                        f"Coqui server script not found: {self.server_script}"
+                    )
             else:
                 self.logger.error(f"Conda environment '{self.conda_env}' not found.")
         except Exception as e:
             self.logger.error(f"Coqui XTTS initialization error: {e}")
 
-    def generate_audio(self, text: str) -> Optional[str]:
+    def generate_audio(self, text: str) -> str | None:
         """
         Generate audio using Coqui XTTS v2 via subprocess to coqui_env.
 
@@ -292,9 +285,14 @@ class CoquiTTSEngine(TTSEngineBase):
 
         # Build command - use conda run to activate environment and execute script
         cmd = [
-            "conda", "run", "-n", self.conda_env,
-            "python", self.server_script,
-            normalized_text, output_file
+            "conda",
+            "run",
+            "-n",
+            self.conda_env,
+            "python",
+            self.server_script,
+            normalized_text,
+            output_file,
         ]
 
         # Add speaker_wav if available
@@ -309,12 +307,12 @@ class CoquiTTSEngine(TTSEngineBase):
                 capture_output=True,
                 text=True,
                 timeout=120,  # 2 minutes max for synthesis
-                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             )
 
             # Log stderr (Coqui prints status there)
             if result.stderr:
-                for line in result.stderr.strip().split('\n'):
+                for line in result.stderr.strip().split("\n"):
                     if line.strip():
                         self.logger.debug(f"Coqui stderr: {line.strip()}")
 
@@ -373,6 +371,7 @@ class EdgeTTSEngine(TTSEngineBase):
 
         try:
             import edge_tts
+
             self.edge_available = True
             self.logger.info(f"Edge TTS initialized. Voice: {self.voice}")
         except ImportError:
@@ -381,7 +380,7 @@ class EdgeTTSEngine(TTSEngineBase):
             )
             self.edge_available = False
 
-    def generate_audio(self, text: str) -> Optional[str]:
+    def generate_audio(self, text: str) -> str | None:
         """
         Generate audio using Edge TTS.
 
@@ -395,8 +394,9 @@ class EdgeTTSEngine(TTSEngineBase):
             self.logger.warning("Edge TTS not available, skipping.")
             return None
 
-        import edge_tts
         import asyncio
+
+        import edge_tts
 
         start_time = time.time()
         self.logger.debug(f"Edge TTS Orijinal Metin: {text}")
@@ -420,6 +420,7 @@ class EdgeTTSEngine(TTSEngineBase):
                     # Try pydub first (needs ffmpeg)
                     try:
                         from pydub import AudioSegment
+
                         audio = AudioSegment.from_mp3(mp3_file)
                         audio.export(output_file, format="wav")
                         if os.path.exists(mp3_file):
@@ -427,6 +428,7 @@ class EdgeTTSEngine(TTSEngineBase):
                     except (ImportError, FileNotFoundError):
                         # Fallback: just rename mp3 as wav (browser can play mp3)
                         import shutil
+
                         shutil.move(mp3_file, output_file)
                         self.logger.warning(
                             "pydub/ffmpeg not available. Output is MP3 format. "
@@ -490,7 +492,7 @@ class GoogleCloudTTSEngine(TTSEngineBase):
             self.client = None
             self.logger.error(f"Google Cloud TTS Başlatma Hatası: {e}")
 
-    def generate_audio(self, text: str, max_retries: int = None) -> Optional[str]:
+    def generate_audio(self, text: str, max_retries: int = None) -> str | None:
         """
         Generate audio using Google Cloud TTS with retry logic.
 
@@ -538,9 +540,7 @@ class GoogleCloudTTSEngine(TTSEngineBase):
                 if attempt < retries:
                     time.sleep(2.0)
                 else:
-                    self.logger.error(
-                        "Google TTS Maksimum deneme sayısına ulaştı."
-                    )
+                    self.logger.error("Google TTS Maksimum deneme sayısına ulaştı.")
                     return None
 
             except Exception as e:
@@ -577,8 +577,13 @@ class TTSEngineRouter:
     ENGINE_COQUI = "coqui"
     ENGINE_EDGE = "edge"
 
-    def __init__(self, logger, enable_piper: bool = None,
-                 enable_coqui: bool = None, enable_edge: bool = None):
+    def __init__(
+        self,
+        logger,
+        enable_piper: bool = None,
+        enable_coqui: bool = None,
+        enable_edge: bool = None,
+    ):
         """
         Initialize TTS engine router.
 
@@ -605,7 +610,11 @@ class TTSEngineRouter:
             logger.error(f"Google Cloud TTS başlatma hatası: {e}")
 
         # 2. Piper TTS
-        use_piper = enable_piper if enable_piper is not None else Config.TTS_ENABLE_PIPER_FALLBACK
+        use_piper = (
+            enable_piper
+            if enable_piper is not None
+            else Config.TTS_ENABLE_PIPER_FALLBACK
+        )
         if use_piper:
             try:
                 if os.path.exists(Config.PIPER_MODEL_PATH):
@@ -623,7 +632,11 @@ class TTSEngineRouter:
                 logger.error(f"Piper TTS başlatma hatası: {e}")
 
         # 3. Coqui XTTS v2
-        use_coqui = enable_coqui if enable_coqui is not None else Config.TTS_ENABLE_COQUI_FALLBACK
+        use_coqui = (
+            enable_coqui
+            if enable_coqui is not None
+            else Config.TTS_ENABLE_COQUI_FALLBACK
+        )
         if use_coqui:
             try:
                 coqui_engine = CoquiTTSEngine(logger)
@@ -638,7 +651,9 @@ class TTSEngineRouter:
                 logger.error(f"Coqui XTTS başlatma hatası: {e}")
 
         # 4. Edge TTS
-        use_edge = enable_edge if enable_edge is not None else Config.TTS_ENABLE_EDGE_FALLBACK
+        use_edge = (
+            enable_edge if enable_edge is not None else Config.TTS_ENABLE_EDGE_FALLBACK
+        )
         if use_edge:
             try:
                 edge_engine = EdgeTTSEngine(logger)
@@ -711,7 +726,7 @@ class TTSEngineRouter:
 
         return available
 
-    def generate_audio(self, text: str, engine_name: str = None) -> Optional[str]:
+    def generate_audio(self, text: str, engine_name: str = None) -> str | None:
         """
         Generate audio using specified engine, or default if none specified.
 
@@ -761,7 +776,7 @@ class TTSEngineRouter:
             self.logger.error(f"{engine_name} hatası: {e}")
             return self._try_fallback(text, skip_engine=engine_name)
 
-    def _try_fallback(self, text: str, skip_engine: str) -> Optional[str]:
+    def _try_fallback(self, text: str, skip_engine: str) -> str | None:
         """Try remaining engines if primary fails."""
         for name, engine in self.engines.items():
             if name == skip_engine:
@@ -793,4 +808,5 @@ class TTSFallbackChain(TTSEngineRouter):
     Deprecated: Use TTSEngineRouter instead.
     Kept for backward compatibility.
     """
+
     pass

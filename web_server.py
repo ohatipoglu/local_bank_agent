@@ -13,19 +13,20 @@ Endpoints:
     POST /process_audio  - Process voice input (STT -> Agent -> TTS)
     POST /api/auth       - Authenticate customer by ID number
 """
-import os
-import warnings
-import shutil
-import base64
-import uuid
-import json
+
 import asyncio
-import httpx
+import base64
+import json
+import os
+import shutil
 import sqlite3
-from typing import Optional
+import uuid
+import warnings
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, File, UploadFile, Form, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -33,6 +34,7 @@ from starlette.concurrency import run_in_threadpool
 # Load environment variables from .env file (must be before Config import)
 try:
     from dotenv import load_dotenv
+
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):
         load_dotenv(env_path)
@@ -46,29 +48,32 @@ except ImportError:
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Configuration (must be imported early for env vars)
-from core.config import Config
-from core.logger import get_correlated_logger, set_correlation_id, get_correlation_id
-from core.exceptions import (
-    STTError,
-    STTNoSpeechDetectedError,
-    TTSError,
-    AgentError,
-    SessionError,
-    AuthenticationError,
-)
-from core.security import SecurityMiddleware, RateLimiter, validate_audio_upload
-from core.session_manager import session_manager
-from core.agent_cache import agent_cache
-from infrastructure.mock_services import MockAccountService, MockAuthService
-from infrastructure.tts_engine import TTSFallbackChain, TTSEngineRouter
-from infrastructure.stt_engine import FasterWhisperSTTEngine
 from application.langchain_agent import LangChainBankAgent
+from core.agent_cache import agent_cache
+from core.auth_middleware import AuthenticationMiddleware, setup_cors_middleware
+from core.config import Config
+from core.exceptions import (
+    AuthenticationError,
+    SessionError,
+)
+from core.logger import get_correlated_logger, set_correlation_id
+from core.security import (
+    RateLimiter,
+    SecurityMiddleware,
+    sanitize_filename,
+    validate_audio_upload,
+)
+from core.session_manager import session_manager
+from infrastructure.mock_services import MockAccountService, MockAuthService
+from infrastructure.stt_engine import FasterWhisperSTTEngine
+from infrastructure.tts_engine import TTSEngineRouter
 
 # Google credentials setup
 if Config.GOOGLE_APPLICATION_CREDENTIALS:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = Config.GOOGLE_APPLICATION_CREDENTIALS
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
+
 
 # ---------------------------------------------------------------------------
 # Lifespan events (startup/shutdown)
@@ -86,6 +91,7 @@ async def lifespan(app: FastAPI):
     app.state.log.info("👋 Local Bank AI Agent kapatılıyor...")
     agent_cache.clear()
 
+
 # ---------------------------------------------------------------------------
 # App initialization
 # ---------------------------------------------------------------------------
@@ -96,12 +102,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS middleware (MUST be first to handle preflight requests)
+setup_cors_middleware(app)
+
 # Security middleware (rate limiting, input validation)
 rate_limiter = RateLimiter(
     max_requests=Config.RATE_LIMIT_REQUESTS,
     window_seconds=Config.RATE_LIMIT_WINDOW_SECONDS,
 )
 app.add_middleware(SecurityMiddleware, rate_limiter=rate_limiter)
+
+# Authentication middleware for protected endpoints
+app.add_middleware(AuthenticationMiddleware)
 
 # Templates and static files
 templates_dir = os.path.join(current_dir, "templates")
@@ -144,13 +156,14 @@ log.info("Tüm servisler başarıyla başlatıldı.")
 def _create_agent_factory(model_name: str):
     """
     Create a factory function for agent cache.
-    
+
     Args:
         model_name: Ollama model name
-        
+
     Returns:
         Callable that creates LangChainBankAgent
     """
+
     def factory():
         return LangChainBankAgent(
             account_service=account_service,
@@ -158,16 +171,17 @@ def _create_agent_factory(model_name: str):
             logger=log,
             max_tokens=Config.LLM_MAX_TOKENS,
         )
+
     return factory
 
 
 def get_agent_for_model(model_name: str) -> LangChainBankAgent:
     """
     Get or create a cached agent for the specified model.
-    
+
     Args:
         model_name: Ollama model name
-        
+
     Returns:
         LangChainBankAgent instance
     """
@@ -198,12 +212,19 @@ async def favicon():
 async def get_models():
     """
     List available Ollama models dynamically.
-    
+
     Queries Ollama's local API for installed models.
     Falls back to configured default model if Ollama is unreachable.
     """
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        timeout_val = (
+            float(Config.LLM_TIMEOUT_SECONDS)
+            if hasattr(Config, "LLM_TIMEOUT_SECONDS")
+            else 180.0
+        )
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout_val, connect=60.0)
+        ) as client:
             response = await client.get(f"{Config.LLM_BASE_URL}/api/tags")
             if response.status_code == 200:
                 data = response.json()
@@ -265,11 +286,12 @@ async def read_logs(request: Request):
 async def get_logs(limit: int = 100):
     """
     Retrieve recent application logs.
-    
+
     Args:
         limit: Maximum number of log entries to return (default: 100)
     """
     from core.logger import LOG_DB_PATH
+
     try:
         conn = sqlite3.connect(LOG_DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -299,7 +321,7 @@ async def get_logs(limit: int = 100):
 async def health_check():
     """
     Comprehensive health check for all system components.
-    
+
     Returns status of:
     - STT engine (Whisper model loaded)
     - TTS engine (Google Cloud / Piper available)
@@ -342,7 +364,14 @@ async def health_check():
 
     # Check Ollama
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        timeout_val = (
+            float(Config.LLM_TIMEOUT_SECONDS)
+            if hasattr(Config, "LLM_TIMEOUT_SECONDS")
+            else 180.0
+        )
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(min(timeout_val, 10.0), connect=5.0)
+        ) as client:
             response = await client.get(f"{Config.LLM_BASE_URL}/api/tags")
             health["components"]["ollama"] = {
                 "status": "healthy" if response.status_code == 200 else "unhealthy",
@@ -381,16 +410,17 @@ async def session_stats():
 
 @app.get("/events")
 async def sse_events(
-    session_id: str = None,
-    status: str = None,
+    session_id: str | None = None,
+    status: str | None = None,
 ):
     """
     Server-Sent Events endpoint for real-time status updates.
-    
+
     Args:
         session_id: Optional session to filter events for
         status: Current processing stage (for client to track progress)
     """
+
     # Simple SSE event generator
     async def event_generator():
         stages = [
@@ -423,11 +453,11 @@ async def authenticate_customer(
 ):
     """
     Authenticate customer by ID number and bind to session.
-    
+
     Args:
         session_id: Session identifier
         customer_id: 11-digit customer ID number
-        
+
     Returns:
         Authentication result with customer info
     """
@@ -447,10 +477,10 @@ async def authenticate_customer(
 
         # Bind to session
         session_manager.authenticate_session(session_id, customer_id)
-        
+
         # Get customer info
         customer_info = auth_service.get_customer_info(customer_id)
-        
+
         return {
             "status": "success",
             "authenticated": True,
@@ -463,12 +493,12 @@ async def authenticate_customer(
         }
 
     except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise HTTPException(status_code=401, detail=str(e)) from e
     except SessionError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         log.error(f"Kimlik doğrulama hatası: {e}")
-        raise HTTPException(status_code=500, detail="Kimlik doğrulanamadı.")
+        raise HTTPException(status_code=500, detail="Kimlik doğrulanamadı.") from e
 
 
 def _process_audio_sync(
@@ -476,8 +506,8 @@ def _process_audio_sync(
     strictness_level: int,
     model_name: str,
     session_id: str,
-    customer_id: str = None,
-    tts_engine_name: str = None,
+    customer_id: str | None = None,
+    tts_engine_name: str | None = None,
 ) -> dict:
     """
     Synchronous audio processing pipeline.
@@ -518,7 +548,9 @@ def _process_audio_sync(
         )
 
         # 4. Text-to-Speech (with engine selection)
-        output_file = tts_engine.generate_audio(text=ai_response_text, engine_name=tts_engine_name)
+        output_file = tts_engine.generate_audio(
+            text=ai_response_text, engine_name=tts_engine_name
+        )
 
         if not output_file or not os.path.exists(output_file):
             return {
@@ -551,6 +583,7 @@ def _process_audio_sync(
                 os.remove(output_file)
         except OSError as e:
             log.error(f"Geçici dosya temizleme hatası: {e}")
+            raise e
 
 
 @app.post(
@@ -603,11 +636,12 @@ async def process_audio(
         raise HTTPException(status_code=400, detail=error_msg)
 
     try:
-        # Save temp audio
+        # Save temp audio with sanitized filename
         unique_id = uuid.uuid4().hex
-        filename_str = str(audio.filename or "user_voice.wav")
+        original_filename = str(audio.filename or "user_voice.wav")
+        safe_filename = sanitize_filename(original_filename)
         temp_audio_path = os.path.join(
-            current_dir, f"web_temp_{unique_id}_{filename_str}"
+            current_dir, f"web_temp_{unique_id}_{safe_filename}"
         )
 
         with open(temp_audio_path, "wb") as buffer:
@@ -633,7 +667,7 @@ async def process_audio(
 
     except Exception as e:
         log.error(f"Web Servis Hatası: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # ---------------------------------------------------------------------------

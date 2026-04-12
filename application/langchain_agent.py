@@ -2,22 +2,22 @@
 LangChain/LangGraph banking agent with Ollama integration.
 Provides ReAct-style reasoning with banking tool calling.
 """
+
 import re
+
 import emoji
 import httpx
-from typing import Optional
-
-from domain.interfaces import IAccountService
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from application.prompts import get_dynamic_prompt
 from application.tools_registry import BankToolsRegistry
-from core.exceptions import AgentError, AgentInitializationError
+from core.exceptions import AgentInitializationError
 from core.logger import get_correlated_logger
+from domain.interfaces import IAccountService
 
 
 class LoguruCallbackHandler(BaseCallbackHandler):
@@ -34,9 +34,7 @@ class LoguruCallbackHandler(BaseCallbackHandler):
         for msg_list in messages:
             for msg in msg_list:
                 formatted_messages.append(f"[{msg.type.upper()}]: {msg.content}")
-        self.log.debug(
-            "[OLLAMA İSTEK BAŞLADI] -> \n" + "\n".join(formatted_messages)
-        )
+        self.log.debug("[OLLAMA İSTEK BAŞLADI] -> \n" + "\n".join(formatted_messages))
 
     def on_llm_end(self, response, **kwargs):
         try:
@@ -58,10 +56,10 @@ class LoguruCallbackHandler(BaseCallbackHandler):
 class LangChainBankAgent:
     """
     AI banking agent using LangGraph ReAct pattern with tool calling.
-    
+
     Processes natural language requests and invokes banking tools
     (balance inquiry, credit card debt, EFT, Havale) as needed.
-    
+
     Features:
     - Dynamic strictness level (1-5) for behavioral control
     - Session-based conversation memory
@@ -70,14 +68,14 @@ class LangChainBankAgent:
     """
 
     # Compiled regex for response sanitization (performance optimization)
-    _EMOJI_PATTERN = re.compile(r'[:;=]-?[)(DPOp]')
+    _EMOJI_PATTERN = re.compile(r"[:;=]-?[)(DPOp]")
     _MARKDOWN_PATTERNS = [
-        (re.compile(r'#+\s*'), ''),                          # Headers
-        (re.compile(r'\*\*(.*?)\*\*'), r'\1'),               # Bold **
-        (re.compile(r'\*(.*?)\*'), r'\1'),                   # Italic *
-        (re.compile(r'__(.*?)__'), r'\1'),                   # Bold __
-        (re.compile(r'_(.*?)_'), r'\1'),                     # Italic _
-        (re.compile(r'^\s*[-*+><]\s+', re.MULTILINE), ''),   # List items
+        (re.compile(r"#+\s*"), ""),  # Headers
+        (re.compile(r"\*\*(.*?)\*\*"), r"\1"),  # Bold **
+        (re.compile(r"\*(.*?)\*"), r"\1"),  # Italic *
+        (re.compile(r"__(.*?)__"), r"\1"),  # Bold __
+        (re.compile(r"_(.*?)_"), r"\1"),  # Italic _
+        (re.compile(r"^\s*[-*+><]\s+", re.MULTILINE), ""),  # List items
     ]
 
     def __init__(
@@ -89,7 +87,7 @@ class LangChainBankAgent:
     ):
         """
         Initialize the banking agent.
-        
+
         Args:
             account_service: Banking service implementation
             model_name: Ollama model name (e.g., "gemma4:26B-32K")
@@ -149,13 +147,13 @@ class LangChainBankAgent:
     ) -> str:
         """
         Process a single conversation turn.
-        
+
         Args:
             user_text: User's input text
             strictness_level: Behavioral control level (1-5)
             session_id: Unique session identifier (required)
             customer_id: Verified customer ID (optional, defaults per tool)
-            
+
         Returns:
             Agent's response text
         """
@@ -230,18 +228,18 @@ class LangChainBankAgent:
     def _sanitize_response(cls, text: str) -> str:
         """
         Remove emojis, markdown, and formatting for TTS compatibility.
-        
+
         Args:
             text: Raw agent response
-            
+
         Returns:
             Cleaned plain text
         """
         # 1. Remove text-based emojis
-        text = cls._EMOJI_PATTERN.sub('', text)
+        text = cls._EMOJI_PATTERN.sub("", text)
 
         # 2. Remove unicode emojis
-        text = emoji.replace_emoji(text, replace='')
+        text = emoji.replace_emoji(text, replace="")
 
         # 3. Remove markdown formatting
         for pattern, replacement in cls._MARKDOWN_PATTERNS:

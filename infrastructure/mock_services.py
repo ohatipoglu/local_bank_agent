@@ -1,10 +1,11 @@
 """
 Mock implementations of banking services for development and testing.
 """
+
 import random
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List
+from typing import Any
 
 from domain.interfaces import IAccountService, IAuthService
 
@@ -12,23 +13,27 @@ from domain.interfaces import IAccountService, IAuthService
 class MockAuthService(IAuthService):
     """
     Mock authentication service for development.
-    
-    Validates 11-digit Turkish TC Kimlik number format.
+
+    Validates 11-digit Turkish TC Kimlik number format with algorithmic check.
     Replace with real authentication in production.
+
+    Note: Test numbers are now algorithmically valid TC Kimlik numbers.
+    - 10000000146: Valid per checksum algorithm
+    - 20000000132: Valid per checksum algorithm
     """
 
-    # Simulated customer database
+    # Simulated customer database (using algorithmically valid TC Kimlik numbers)
     _CUSTOMERS = {
-        "12345678901": {
+        "10000000146": {
             "id": "CUST001",
-            "tc_kimlik": "12345678901",
+            "tc_kimlik": "10000000146",
             "first_name": "Ahmet",
             "last_name": "Yılmaz",
             "phone_number": "5551234567",
         },
-        "98765432109": {
+        "20000000132": {
             "id": "CUST002",
-            "tc_kimlik": "98765432109",
+            "tc_kimlik": "20000000132",
             "first_name": "Fatma",
             "last_name": "Demir",
             "phone_number": "5559876543",
@@ -37,27 +42,34 @@ class MockAuthService(IAuthService):
 
     def verify_customer(self, id_number: str) -> bool:
         """
-        Verify customer by 11-digit ID number.
-        
+        Verify customer by 11-digit ID number with TC Kimlik algorithm check.
+
         Args:
             id_number: Turkish TC Kimlik number (11 digits)
-            
+
         Returns:
-            True if valid format and customer exists
+            True if valid format and algorithmically valid
         """
         if not id_number or len(id_number) != 11 or not id_number.isdigit():
             return False
 
-        # For mock: accept any 11-digit number
+        # Import algorithmic validation
+        from core.tc_kimlik_validator import validate_tc_kimlik
+
+        # Check algorithmic validity
+        if not validate_tc_kimlik(id_number):
+            return False
+
+        # For mock: accept any algorithmically valid number
         return True
 
-    def get_customer_info(self, id_number: str) -> Optional[Dict[str, Any]]:
+    def get_customer_info(self, id_number: str) -> dict[str, Any] | None:
         """
         Get customer info by ID number.
-        
+
         Args:
             id_number: Turkish TC Kimlik number
-            
+
         Returns:
             Customer info dictionary or None
         """
@@ -67,7 +79,7 @@ class MockAuthService(IAuthService):
 class MockAccountService(IAccountService):
     """
     Mock account service for development and testing.
-    
+
     Returns hardcoded data. Replace with real banking API in production.
     """
 
@@ -100,45 +112,52 @@ class MockAccountService(IAccountService):
         },
     }
 
-    def get_balance(self, customer_id: str) -> Dict[str, Any]:
+    def get_balance(self, customer_id: str) -> dict[str, Any]:
         """
         Get customer account balance.
-        
+
         Args:
             customer_id: Customer ID number
-            
+
         Returns:
             Account balance information
         """
         return self._ACCOUNTS.get(
             customer_id,
-            {"account_type": "Vadesiz", "balance": 15000.00, "currency": "TRY"}
+            {"account_type": "Vadesiz", "balance": 15000.00, "currency": "TRY"},
         )
 
-    def get_credit_card_debt(self, customer_id: str) -> Dict[str, Any]:
+    def get_credit_card_debt(self, customer_id: str) -> dict[str, Any]:
         """
         Get customer credit card debt.
-        
+
         Args:
             customer_id: Customer ID number
-            
+
         Returns:
             Credit card debt information
         """
         return self._CREDIT_CARDS.get(
             customer_id,
-            {"card_name": "Classic Visa", "debt": 5000.00, "currency": "TRY", "due_date": "10 Nisan"}
+            {
+                "card_name": "Classic Visa",
+                "debt": 5000.00,
+                "currency": "TRY",
+                "due_date": "10 Nisan",
+            },
         )
 
-    def execute_eft(self, customer_id: str, to_iban: str, amount: float) -> Dict[str, Any]:
+    def execute_eft(
+        self, customer_id: str, to_iban: str, amount: float
+    ) -> dict[str, Any]:
         """
         Execute EFT transfer.
-        
+
         Args:
             customer_id: Source customer ID
             to_iban: Destination IBAN
             amount: Transfer amount
-            
+
         Returns:
             Transaction result
         """
@@ -160,15 +179,17 @@ class MockAccountService(IAccountService):
             "to_iban": to_iban,
         }
 
-    def execute_havale(self, customer_id: str, to_account: str, amount: float) -> Dict[str, Any]:
+    def execute_havale(
+        self, customer_id: str, to_account: str, amount: float
+    ) -> dict[str, Any]:
         """
         Execute Havale transfer (same bank).
-        
+
         Args:
             customer_id: Source customer ID
             to_account: Destination account number
             amount: Transfer amount
-            
+
         Returns:
             Transaction result
         """
@@ -183,31 +204,125 @@ class MockAccountService(IAccountService):
         }
 
     def get_transaction_history(
-        self,
-        customer_id: str,
-        limit: int = 10
-    ) -> List[Dict[str, Any]]:
+        self, customer_id: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
         """
         Get recent transaction history.
-        
+
         Args:
             customer_id: Customer ID
             limit: Number of transactions to return
-            
+
         Returns:
             List of recent transactions
         """
         # Generate mock transactions
         transactions = []
-        for i in range(min(limit, 5)):
+        for _ in range(min(limit, 5)):
             days_ago = random.randint(1, 30)
             date = datetime.now() - timedelta(days=days_ago)
-            transactions.append({
-                "transaction_id": f"TXN{uuid.uuid4().hex[:6].upper()}",
-                "type": random.choice(["EFT", "Havale", "Kredi Kartı Ödeme"]),
-                "amount": round(random.uniform(100, 5000), 2),
-                "currency": "TRY",
-                "timestamp": date.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "Başarılı",
-            })
+            transactions.append(
+                {
+                    "transaction_id": f"TXN{uuid.uuid4().hex[:6].upper()}",
+                    "type": random.choice(["EFT", "Havale", "Kredi Kartı Ödeme"]),
+                    "amount": round(random.uniform(100, 5000), 2),
+                    "currency": "TRY",
+                    "timestamp": date.strftime("%Y-%m-%d %H:%M:%S"),
+                    "status": "Başarılı",
+                }
+            )
         return transactions
+
+    def list_customer_accounts(self, customer_id: str) -> list[dict[str, Any]]:
+        """
+        List all accounts for a customer.
+
+        Args:
+            customer_id: Customer ID
+
+        Returns:
+            List of account dictionaries
+        """
+        # Return all accounts for this customer
+        accounts = []
+
+        # Get deposit account
+        if customer_id in self._ACCOUNTS:
+            account = self._ACCOUNTS[customer_id].copy()
+            account["account_number"] = customer_id
+            accounts.append(account)
+
+        # Get credit card account
+        if customer_id in self._CREDIT_CARDS:
+            card = self._CREDIT_CARDS[customer_id].copy()
+            card["account_type"] = "Kredi Kartı"
+            card["balance"] = -card.get("debt", 0)  # Negative balance = debt
+            card["account_number"] = customer_id
+            accounts.append(card)
+
+        # If no accounts found, return default
+        if not accounts:
+            accounts.append(
+                {
+                    "account_type": "Vadesiz",
+                    "balance": 15000.00,
+                    "currency": "TRY",
+                    "account_number": customer_id,
+                }
+            )
+
+        return accounts
+
+    def pay_credit_card(self, customer_id: str, amount: float) -> dict[str, Any]:
+        """
+        Pay credit card bill.
+
+        Args:
+            customer_id: Customer ID
+            amount: Payment amount
+
+        Returns:
+            Transaction result
+        """
+        # Validate amount
+        if amount <= 0:
+            return {
+                "status": "error",
+                "message": "Geçersiz tutar. Pozitif bir miktar giriniz.",
+                "transaction_id": None,
+            }
+
+        # Get current debt
+        debt_info = self.get_credit_card_debt(customer_id)
+        current_debt = debt_info.get("debt", 0)
+
+        if current_debt <= 0:
+            return {
+                "status": "error",
+                "message": "Kredi kartı borcunuz bulunmuyor.",
+                "transaction_id": None,
+            }
+
+        if amount > current_debt:
+            return {
+                "status": "error",
+                "message": f"Ödeme tutarı borçtan fazla olamaz. Güncel borç: {current_debt:,.2f} {debt_info.get('currency', 'TRY')}",
+                "transaction_id": None,
+            }
+
+        # Simulate payment transaction
+        transaction_id = f"CCP{uuid.uuid4().hex[:8].upper()}"
+        remaining_debt = current_debt - amount
+
+        return {
+            "status": "success",
+            "message": (
+                f"Kredi kartı ödemesi başarıyla tamamlandı. "
+                f"İşlem No: {transaction_id}, "
+                f"Ödenen: {amount:,.2f} {debt_info.get('currency', 'TRY')}, "
+                f"Kalan Borç: {remaining_debt:,.2f} {debt_info.get('currency', 'TRY')}"
+            ),
+            "transaction_id": transaction_id,
+            "amount_paid": amount,
+            "remaining_debt": remaining_debt,
+        }

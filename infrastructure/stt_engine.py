@@ -2,11 +2,11 @@
 Speech-to-Text engine using Faster-Whisper with Turkish language support.
 Provides file-based transcription and live microphone listening.
 """
-import time
-import os
-import uuid
+
 import glob
-from typing import Optional
+import os
+import time
+import uuid
 
 import speech_recognition as sr
 from faster_whisper import WhisperModel
@@ -14,21 +14,21 @@ from faster_whisper import WhisperModel
 from core.config import Config
 from core.exceptions import (
     STTError,
-    STTNoSpeechDetectedError,
     STTModelLoadError,
+    STTNoSpeechDetectedError,
 )
 
 
 class FasterWhisperSTTEngine:
     """
     Speech-to-Text engine using Faster-Whisper with Turkish language optimization.
-    
+
     Features:
     - Domain-specific initial prompts for banking context
     - Dynamic energy threshold for ambient noise adaptation
     - Automatic temporary file cleanup
     - Configurable model size and compute type
-    
+
     Usage:
         stt = FasterWhisperSTTEngine(logger)
         text = stt.transcribe_file("audio.wav")
@@ -49,13 +49,13 @@ class FasterWhisperSTTEngine:
     ):
         """
         Initialize STT engine.
-        
+
         Args:
             logger: Loguru logger instance
             model_size: Whisper model size (default: Config.STT_MODEL_SIZE)
             device: Compute device (default: Config.STT_DEVICE)
             compute_type: Compute precision (default: Config.STT_COMPUTE_TYPE)
-            
+
         Raises:
             STTModelLoadError: If model fails to load
         """
@@ -65,8 +65,7 @@ class FasterWhisperSTTEngine:
         self.compute_type = compute_type or Config.STT_COMPUTE_TYPE
 
         self.log.info(
-            f"STT Motoru başlatılıyor... "
-            f"(Model: {self.model_size}, {self.device})"
+            f"STT Motoru başlatılıyor... " f"(Model: {self.model_size}, {self.device})"
         )
 
         try:
@@ -77,9 +76,7 @@ class FasterWhisperSTTEngine:
             )
             self.log.info("Faster-Whisper modeli başarıyla yüklendi.")
         except Exception as e:
-            raise STTModelLoadError(
-                f"Whisper modeli yüklenirken hata: {e}"
-            ) from e
+            raise STTModelLoadError(f"Whisper modeli yüklenirken hata: {e}") from e
 
         # Speech recognizer setup
         self.recognizer = sr.Recognizer()
@@ -91,7 +88,9 @@ class FasterWhisperSTTEngine:
             self.microphone = sr.Microphone()
             self.log.info("Mikrofon başarıyla başlatıldı.")
         except Exception as e:
-            self.log.warning(f"Mikrofon başlatılamadı (sadece dosya modu çalışacak): {e}")
+            self.log.warning(
+                f"Mikrofon başlatılamadı (sadece dosya modu çalışacak): {e}"
+            )
             self.microphone = None
 
         # Cleanup orphaned temp files on startup
@@ -119,15 +118,15 @@ class FasterWhisperSTTEngine:
     ) -> str:
         """
         Listen to microphone and transcribe speech with silence detection.
-        
+
         Args:
             timeout: Seconds to wait for speech to start
             phrase_time_limit: Maximum seconds of speech to record
             initial_prompt: Context prompt for better recognition
-            
+
         Returns:
             Transcribed text (empty string if no speech detected)
-            
+
         Raises:
             STTNoSpeechDetectedError: If no speech detected within timeout
         """
@@ -137,11 +136,11 @@ class FasterWhisperSTTEngine:
         prompt = initial_prompt or self.BANKING_PROMPT
 
         with self.microphone as source:
-            self.log.info(
-                "Ortam gürültüsü kalibre ediliyor... Lütfen bekleyin."
-            )
+            self.log.info("Ortam gürültüsü kalibre ediliyor... Lütfen bekleyin.")
             self.recognizer.adjust_for_ambient_noise(source, duration=2)
-            self.log.info("Dinliyorum... (Konuşmayı bitirdiğinizde otomatik algılanacak)")
+            self.log.info(
+                "Dinliyorum... (Konuşmayı bitirdiğinizde otomatik algılanacak)"
+            )
 
             try:
                 audio_data = self.recognizer.listen(
@@ -182,11 +181,11 @@ class FasterWhisperSTTEngine:
     ) -> str:
         """
         Transcribe an audio file to text.
-        
+
         Args:
             file_path: Path to WAV/audio file
             initial_prompt: Context prompt for better recognition
-            
+
         Returns:
             Transcribed text (empty string on failure)
         """
@@ -202,14 +201,11 @@ class FasterWhisperSTTEngine:
                 initial_prompt=prompt,
             )
 
-            transcription = " ".join(
-                [segment.text for segment in segments]
-            ).strip()
+            transcription = " ".join([segment.text for segment in segments]).strip()
 
             elapsed = time.time() - start_time
             self.log.info(
-                f"STT Tamamlandı. Süre: {elapsed:.2f}sn | "
-                f"Sonuç: '{transcription}'"
+                f"STT Tamamlandı. Süre: {elapsed:.2f}sn | " f"Sonuç: '{transcription}'"
             )
             return transcription
 

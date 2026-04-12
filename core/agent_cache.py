@@ -2,11 +2,12 @@
 Thread-safe agent factory and cache with per-model instance management.
 Replaces global mutable agent state with proper concurrency control.
 """
+
 import threading
 import time
-from typing import Dict, Optional, Any
+from typing import Any
+
 from core.exceptions import AgentInitializationError
-from core.logger import get_correlated_logger
 
 
 class AgentCacheEntry:
@@ -28,7 +29,7 @@ class AgentCacheEntry:
 class AgentCache:
     """
     Thread-safe cache for LangChain agent instances.
-    
+
     Provides:
     - Per-model agent caching with locking
     - Automatic eviction of stale entries
@@ -39,14 +40,14 @@ class AgentCache:
     def __init__(self, max_size: int = 5, ttl_seconds: int = 1800):
         """
         Initialize agent cache.
-        
+
         Args:
             max_size: Maximum number of cached agent instances
             ttl_seconds: Time-to-live for cached entries (30 min default)
         """
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
-        self._cache: Dict[str, AgentCacheEntry] = {}
+        self._cache: dict[str, AgentCacheEntry] = {}
         self._lock = threading.RLock()  # Reentrant lock for nested calls
         self._stats = {
             "hits": 0,
@@ -55,22 +56,16 @@ class AgentCache:
             "creations": 0,
         }
 
-    def get_or_create(
-        self,
-        model_name: str,
-        factory_func,
-        *args,
-        **kwargs
-    ) -> Any:
+    def get_or_create(self, model_name: str, factory_func, *args, **kwargs) -> Any:
         """
         Get cached agent or create new one via factory function.
-        
+
         Args:
             model_name: Ollama model name (cache key)
             factory_func: Callable that creates agent instance
             *args: Arguments to pass to factory
             **kwargs: Keyword arguments to pass to factory
-            
+
         Returns:
             Agent instance
         """
@@ -104,10 +99,10 @@ class AgentCache:
     def invalidate(self, model_name: str) -> bool:
         """
         Remove specific model from cache.
-        
+
         Args:
             model_name: Model name to invalidate
-            
+
         Returns:
             True if entry was removed
         """
@@ -122,10 +117,10 @@ class AgentCache:
         with self._lock:
             self._cache.clear()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get cache statistics.
-        
+
         Returns:
             Dictionary with hit/miss/eviction counts
         """
@@ -146,10 +141,7 @@ class AgentCache:
         if not self._cache:
             return
 
-        oldest_key = min(
-            self._cache.keys(),
-            key=lambda k: self._cache[k].last_accessed
-        )
+        oldest_key = min(self._cache.keys(), key=lambda k: self._cache[k].last_accessed)
         del self._cache[oldest_key]
         self._stats["evictions"] += 1
 
