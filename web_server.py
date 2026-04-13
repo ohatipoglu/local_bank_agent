@@ -25,7 +25,7 @@ import warnings
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -52,6 +52,19 @@ from application.langchain_agent import LangChainBankAgent
 from core.agent_cache import agent_cache
 from core.auth_middleware import AuthenticationMiddleware, setup_cors_middleware
 from core.config import Config
+from core.error_handler import (
+    ERR_AGENT_NOT_INITIALIZED,
+    ERR_INVALID_TC,
+    ERR_INTERNAL_SERVER_ERROR,
+    ERR_SESSION_EXPIRED,
+    ERR_SESSION_NOT_FOUND,
+    ErrorCategory,
+    ErrorCode,
+    ProcessingError,
+    create_error_response,
+    create_success_response,
+    handle_exception,
+)
 from core.exceptions import (
     AuthenticationError,
     SessionError,
@@ -63,7 +76,7 @@ from core.security import (
     sanitize_filename,
     validate_audio_upload,
 )
-from core.session_manager import session_manager
+from core.session_manager_persistent import SQLiteSessionManager
 from infrastructure.mock_services import MockAccountService, MockAuthService
 from infrastructure.stt_engine import FasterWhisperSTTEngine
 from infrastructure.tts_engine import TTSEngineRouter
@@ -89,6 +102,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     app.state.log.info("👋 Local Bank AI Agent kapatılıyor...")
+    session_manager.close()
     agent_cache.clear()
 
 
@@ -134,6 +148,12 @@ log.info("Servisler başlatılıyor...")
 
 account_service = MockAccountService()
 auth_service = MockAuthService()
+
+# Persistent session manager (SQLite-backed, survives restarts)
+session_manager = SQLiteSessionManager(
+    ttl_seconds=Config.SESSION_TTL_SECONDS if hasattr(Config, "SESSION_TTL_SECONDS") else 3600,
+    max_sessions=Config.MAX_SESSIONS if hasattr(Config, "MAX_SESSIONS") else 10000,
+)
 
 # TTS: Use engine router (Google Cloud -> Piper -> Coqui XTTS)
 tts_engine = TTSEngineRouter(logger=log)
@@ -405,7 +425,12 @@ async def session_stats():
     try:
         return session_manager.get_stats()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=handle_exception(
+                ERR_INTERNAL_SERVER_ERROR, e, logger=log, context="session_stats"
+            ).get("error"),
+        )
 
 
 @app.get("/events")
@@ -470,9 +495,9 @@ async def authenticate_customer(
         # Authenticate
         is_valid = auth_service.verify_customer(customer_id)
         if not is_valid:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=401,
-                detail="Geçersiz müşteri kimliği.",
+                content=create_error_response(ERR_INVALID_TC).get("error"),
             )
 
         # Bind to session
@@ -493,12 +518,126 @@ async def authenticate_customer(
         }
 
     except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=str(e)) from e
+        return JSONResponse(
+            status_code=401,
+            content=handle_exception(
+                ERR_INVALID_TC, e, logger=log, context="authenticate_customer"
+            ).get("error"),
+        )
     except SessionError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        return JSONResponse(
+            status_code=400,
+            content=handle_exception(
+                ERR_SESSION_EXPIRED, e, logger=log, context="authenticate_customer"
+            ).get("error"),
+        )
     except Exception as e:
-        log.error(f"Kimlik doğrulama hatası: {e}")
-        raise HTTPException(status_code=500, detail="Kimlik doğrulanamadı.") from e
+        return JSONResponse(
+            status_code=500,
+            content=handle_exception(
+                ERR_INTERNAL_SERVER_ERROR, e, logger=log, context="authenticate_customer"
+            ).get("error"),
+        )
+
+
+@app.post("/api/auth/verify")
+async def verify_customer_auth(
+    customer_id: str = Form(...),
+    password: str = Form(None),
+    otp_code: str = Form(None),
+):
+    """
+    Verify customer identity via password or SMS OTP and return JWT token.
+
+    This endpoint simulates a production-like authentication flow where:
+    - Password authentication verifies against stored credentials
+    - OTP authentication simulates SMS-based verification
+
+    Args:
+        customer_id: 11-digit Turkish TC Kimlik number
+        password: Customer password (use either password OR otp_code)
+        otp_code: 6-digit SMS OTP code (use either password OR otp_code)
+
+    Returns:
+        JWT token and customer info on success
+    """
+    try:
+        # Validate customer ID exists
+        is_valid = auth_service.verify_customer(customer_id)
+        if not is_valid:
+            return JSONResponse(
+                status_code=401,
+                content=create_error_response(ERR_INVALID_TC).get("error"),
+            )
+
+        # Determine auth method and verify
+        auth_method = None
+        if password:
+            if not auth_service.verify_password(customer_id, password):
+                return JSONResponse(
+                    status_code=401,
+                    content=create_error_response(
+                        ProcessingError(
+                            category=ErrorCategory.AUTHENTICATION_ERROR,
+                            code=ErrorCode.AUTHENTICATION_REQUIRED,
+                            message_tr="Şifre hatalı. Lütfen tekrar deneyin.",
+                            message_en="Invalid password",
+                            retryable=True,
+                        )
+                    ).get("error"),
+                )
+            auth_method = "password"
+        elif otp_code:
+            if not auth_service.verify_otp(customer_id, otp_code):
+                return JSONResponse(
+                    status_code=401,
+                    content=create_error_response(
+                        ProcessingError(
+                            category=ErrorCategory.AUTHENTICATION_ERROR,
+                            code=ErrorCode.AUTHENTICATION_REQUIRED,
+                            message_tr="OTP kodu hatalı. Lütfen tekrar deneyin.",
+                            message_en="Invalid OTP code",
+                            retryable=True,
+                        )
+                    ).get("error"),
+                )
+            auth_method = "otp"
+        else:
+            return JSONResponse(
+                status_code=400,
+                content=create_error_response(
+                    ProcessingError(
+                        category=ErrorCategory.AUTHENTICATION_ERROR,
+                        code=ErrorCode.AUTHENTICATION_REQUIRED,
+                        message_tr="Şifre veya OTP kodu gereklidir.",
+                        message_en="Password or OTP code required",
+                        retryable=True,
+                    )
+                ).get("error"),
+            )
+
+        # Generate JWT token
+        token = auth_service.generate_jwt_token(customer_id, auth_method=auth_method)
+
+        # Get customer info
+        customer_info = auth_service.get_customer_info(customer_id)
+
+        return {
+            "status": "success",
+            "token": token,
+            "token_type": "Bearer",
+            "expires_in_hours": auth_service.JWT_EXPIRY_HOURS,
+            "auth_method": auth_method,
+            "customer": customer_info,
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=handle_exception(
+                ERR_INTERNAL_SERVER_ERROR, e, logger=log, context="verify_customer_auth"
+            ).get("error"),
+        )
 
 
 def _process_audio_sync(
@@ -633,7 +772,19 @@ async def process_audio(
     # Validate audio upload
     is_valid, error_msg = validate_audio_upload(audio, audio.filename)
     if not is_valid:
-        raise HTTPException(status_code=400, detail=error_msg)
+        log.warning(f"Audio validation failed: {error_msg}")
+        return JSONResponse(
+            status_code=400,
+            content=create_error_response(
+                ProcessingError(
+                    category=ErrorCategory.AUDIO_VALIDATION_ERROR,
+                    code=ErrorCode.INVALID_MIME_TYPE,
+                    message_tr=error_msg,
+                    message_en=error_msg,
+                    retryable=True,
+                )
+            ).get("error"),
+        )
 
     try:
         # Save temp audio with sanitized filename
@@ -666,8 +817,12 @@ async def process_audio(
         return result
 
     except Exception as e:
-        log.error(f"Web Servis Hatası: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        return JSONResponse(
+            status_code=500,
+            content=handle_exception(
+                ERR_INTERNAL_SERVER_ERROR, e, logger=log, context="process_audio"
+            ).get("error"),
+        )
 
 
 # ---------------------------------------------------------------------------

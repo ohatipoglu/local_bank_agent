@@ -2,10 +2,13 @@
 Mock implementations of banking services for development and testing.
 """
 
+import hashlib
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+import jwt
 
 from domain.interfaces import IAccountService, IAuthService
 
@@ -15,12 +18,22 @@ class MockAuthService(IAuthService):
     Mock authentication service for development.
 
     Validates 11-digit Turkish TC Kimlik number format with algorithmic check.
-    Replace with real authentication in production.
+    Simulates password/OTP verification for production-like auth flow.
+    Generates JWT tokens for authenticated sessions.
 
     Note: Test numbers are now algorithmically valid TC Kimlik numbers.
     - 10000000146: Valid per checksum algorithm
     - 20000000132: Valid per checksum algorithm
+
+    Simulated credentials (for development only):
+    - Customer 10000000146: password="123456", OTP="111111"
+    - Customer 20000000132: password="654321", OTP="222222"
     """
+
+    # JWT configuration (development only - use strong secret in production)
+    JWT_SECRET = "dev-secret-key-change-in-production"
+    JWT_ALGORITHM = "HS256"
+    JWT_EXPIRY_HOURS = 24
 
     # Simulated customer database (using algorithmically valid TC Kimlik numbers)
     _CUSTOMERS = {
@@ -30,6 +43,9 @@ class MockAuthService(IAuthService):
             "first_name": "Ahmet",
             "last_name": "Yılmaz",
             "phone_number": "5551234567",
+            # Simulated credentials (in production, these would be hashed)
+            "password_hash": hashlib.sha256("123456".encode()).hexdigest(),
+            "otp_code": "111111",  # Simulated SMS OTP
         },
         "20000000132": {
             "id": "CUST002",
@@ -37,6 +53,8 @@ class MockAuthService(IAuthService):
             "first_name": "Fatma",
             "last_name": "Demir",
             "phone_number": "5559876543",
+            "password_hash": hashlib.sha256("654321".encode()).hexdigest(),
+            "otp_code": "222222",  # Simulated SMS OTP
         },
     }
 
@@ -63,6 +81,93 @@ class MockAuthService(IAuthService):
         # For mock: accept any algorithmically valid number
         return True
 
+    def verify_password(self, id_number: str, password: str) -> bool:
+        """
+        Verify customer password (simulated).
+
+        Args:
+            id_number: Turkish TC Kimlik number
+            password: Plain text password
+
+        Returns:
+            True if password matches
+        """
+        customer = self._CUSTOMERS.get(id_number)
+        if not customer:
+            return False
+
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        return password_hash == customer["password_hash"]
+
+    def verify_otp(self, id_number: str, otp_code: str) -> bool:
+        """
+        Verify SMS OTP code (simulated).
+
+        In production, this would check against a real SMS gateway.
+        For development, uses hardcoded OTP codes.
+
+        Args:
+            id_number: Turkish TC Kimlik number
+            otp_code: 6-digit OTP code
+
+        Returns:
+            True if OTP matches
+        """
+        customer = self._CUSTOMERS.get(id_number)
+        if not customer:
+            return False
+
+        return otp_code == customer["otp_code"]
+
+    def generate_jwt_token(self, id_number: str, auth_method: str = "password") -> str:
+        """
+        Generate JWT token for authenticated customer.
+
+        Args:
+            id_number: Turkish TC Kimlik number
+            auth_method: Method used for authentication ("password" or "otp")
+
+        Returns:
+            JWT token string
+        """
+        customer = self._CUSTOMERS.get(id_number)
+        if not customer:
+            raise ValueError(f"Customer not found: {id_number}")
+
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": id_number,
+            "customer_id": customer["id"],
+            "name": f"{customer['first_name']} {customer['last_name']}",
+            "auth_method": auth_method,
+            "iat": now,
+            "exp": now + timedelta(hours=self.JWT_EXPIRY_HOURS),
+            "jti": str(uuid.uuid4()),  # Unique token ID
+        }
+
+        token = jwt.encode(payload, self.JWT_SECRET, algorithm=self.JWT_ALGORITHM)
+        return token
+
+    def decode_jwt_token(self, token: str) -> dict[str, Any] | None:
+        """
+        Decode and validate JWT token.
+
+        Args:
+            token: JWT token string
+
+        Returns:
+            Decoded token payload or None if invalid
+        """
+        try:
+            payload = jwt.decode(
+                token, self.JWT_SECRET, algorithms=[self.JWT_ALGORITHM]
+            )
+            return payload
+        except jwt.ExpiredSignatureError:
+            return None
+        except jwt.InvalidTokenError:
+            return None
+
     def get_customer_info(self, id_number: str) -> dict[str, Any] | None:
         """
         Get customer info by ID number.
@@ -73,7 +178,18 @@ class MockAuthService(IAuthService):
         Returns:
             Customer info dictionary or None
         """
-        return self._CUSTOMERS.get(id_number)
+        customer = self._CUSTOMERS.get(id_number)
+        if customer is None:
+            return None
+
+        # Return copy without sensitive data
+        return {
+            "id": customer["id"],
+            "tc_kimlik": customer["tc_kimlik"],
+            "first_name": customer["first_name"],
+            "last_name": customer["last_name"],
+            "phone_number": customer["phone_number"],
+        }
 
 
 class MockAccountService(IAccountService):

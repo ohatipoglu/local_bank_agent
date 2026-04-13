@@ -123,21 +123,7 @@ htmlcov/
 # ============================================
 # Conda & Package Managers
 # ============================================
-# Conda environment files (use environment.yml instead)
-*.yml
-*.yaml
-!environment.yml
-!docker-compose.yml
-!environment.yml
 conda-env.yml
-
-# ============================================
-# Backup YAML files
-# ============================================
-*.backup.yml
-*.backup.yaml
-*.example.yml
-*.example.yaml
 
 # ============================================
 # AI/IDE Cache & Assistants
@@ -146,10 +132,3 @@ conda-env.yml
 .cursor/
 .claude/
 .copilot/
-
-# ============================================
-# GitHub Actions
-# ============================================
-# Keep workflow files, exclude only backup/debug files
-# .github/workflows/*.backup.yml
-# .github/workflows/*.debug.yml

@@ -116,7 +116,8 @@ Uygulamayı başlattığınızda Coqui otomatik olarak kullanılacak.
 | GET | `/api/health` | Sağlık kontrolü |
 | GET | `/events` | Server-Sent Events (gerçek zamanlı durum) |
 | POST | `/process_audio` | Ses işleme (STT → Agent → TTS) |
-| POST | `/api/auth` | Müşteri kimlik doğrulama |
+| POST | `/api/auth` | Müşteri kimlik doğrulama (session-based) |
+| POST | `/api/auth/verify` | Şifre/OTP doğrulama + JWT token alma |
 
 ## 🎛️ TTS Motorları
 
@@ -202,6 +203,55 @@ pytest tests/test_session_manager.py -v
 - **Oturum Yönetimi**: UUID tabanlı oturumlar, TTL süresi ile sona erme
 - **Yapılandırılmış Loglama**: İlişki ID'leri ile istek takibi
 - **Gizli Bilgi Yönetimi**: Environment variables, asla hardcode değil
+- **JWT Token Authentication**: `/api/auth/verify` endpoint'i ile şifre veya SMS OTP doğrulama
+
+## 🚀 Production Readiness (Üretim Ortamına Hazırlık)
+
+Bu proje **Production Ready** temel yapıdadır. Ancak yüksek trafikli üretim ortamları için aşağıdaki iyileştirmeleri öneriyoruz:
+
+### 📦 Session Storage: SQLite (MVP) → Redis (Production)
+
+**Mevcut Durum:** Oturum yönetimi SQLite ile yapılmaktadır. Bu, gelişim ve küçük ölçekli dağıtımlar için yeterlidir.
+
+**Üretim Önerisi:** Yüksek trafikli ortamlarda SQLite üzerinde oluşan lock'lar performans darboğazı yaratabilir. Redis entegrasyonu ile:
+- ✅ Yatay ölçeklendirme (multi-process / multi-pod)
+- ✅ Düşük gecikme süresi (in-memory storage)
+- ✅ Dağıtık oturum yönetimi
+- ✅ Daha iyi concurrency handling
+
+Redis kurulumu için `docker-compose.yml` dosyasında hazır Redis servisi bulunmaktadır.
+
+### 🔐 Authentication: Mock → Gerçek Kimlik Doğrulama
+
+**Mevcut Durum:** `MockAuthService` şifre ve OTP doğrulamasını simüle etmektedir.
+
+**Üretim Önerisi:**
+- Gerçek kullanıcı veritabanı entegrasyonu (PostgreSQL, MongoDB, vb.)
+- SMS gateway entegrasyonu (Twilio, Netgsm, vb.)
+- JWT secret'ı güçlü bir şekilde yönetin (environment variable + secret manager)
+- JWT expiry süresini iş gereksinimlerinize göre ayarlayın
+
+### ⚡ Rate Limiting: In-Memory → Redis-Backed
+
+**Mevcut Durum:** Rate limiter uygulama belleğinde (dictionary) çalışmaktadır.
+
+**Üretim Önerisi:** Multi-process veya container orchestrasyon (Kubernetes) ortamlarında Redis-backed rate limiting kullanın:
+- `slowapi` kütüphanesi Redis storage ile
+- veya API Gateway seviyesinde rate limiting (NGINX, Kong, APIM)
+
+### 📊 Monitoring & Observability
+
+- **Structured Logging:** Loguru ile JSON formatında loglama aktif
+- **Metrics:** Prometheus metrikleri eklemek için `prometheus-fastapi-instrumentator` kullanın
+- **Tracing:** OpenTelemetry ile distributed tracing ekleyin
+- **Health Checks:** `/api/health` endpoint'i mevcut, Kubernetes liveness/readiness probe'larına entegre edin
+
+### 🛡️ Error Handling: User-Friendly Messages
+
+Tüm hatalar artık `core/error_handler.py` modülü üzerinden standardize edilmiştir:
+- ✅ Kullanıcı dostu Türkçe mesajlar döndürülür
+- ✅ Raw exception detayları (stack trace, path, library hataları) sadece server loglarında tutulur
+- ✅ Internal server error'lar dışarı sızdırılmaz
 
 ## 🐳 Docker ile Dağıtım
 

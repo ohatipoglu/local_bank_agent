@@ -157,6 +157,24 @@ ERR_INVALID_TC = ProcessingError(
     retryable=True,
 )
 
+# Internal Server Error
+ERR_INTERNAL_SERVER_ERROR = ProcessingError(
+    category=ErrorCategory.UNKNOWN_ERROR,
+    code=ErrorCode.INTERNAL_SERVER_ERROR,
+    message_tr="Bir hata oluştu. Lütfen daha sonra tekrar deneyin.",
+    message_en="Internal server error occurred",
+    retryable=True,
+)
+
+# Session Not Found Error
+ERR_SESSION_NOT_FOUND = ProcessingError(
+    category=ErrorCategory.SESSION_ERROR,
+    code=ErrorCode.SESSION_NOT_FOUND,
+    message_tr="Oturum bulunamadı. Lütfen tekrar deneyin.",
+    message_en="Session not found",
+    retryable=True,
+)
+
 
 def create_error_response(
     error: ProcessingError,
@@ -179,6 +197,50 @@ def create_error_response(
     if partial_result:
         response["partial"] = partial_result
     return response
+
+
+def handle_exception(
+    error: ProcessingError,
+    raw_exception: Exception,
+    logger: Any = None,
+    context: str = "",
+    partial_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Handle an exception by logging raw details internally and returning a user-friendly response.
+
+    This function ensures that:
+    - Raw exception details (stack traces, internal paths, library errors) are logged
+      internally for debugging
+    - Only standardized, user-friendly messages are returned to the client
+    - No internal technical details leak to the API consumer
+
+    Args:
+        error: ProcessingError instance with user-friendly message
+        raw_exception: The original exception to log internally
+        logger: Logger instance (e.g., loguru logger) for internal logging
+        context: Additional context about where the error occurred
+        partial_result: Optional partial results to include in response
+
+    Returns:
+        Dictionary suitable for JSON response (user-friendly only)
+
+    Example:
+        except Exception as e:
+            return handle_exception(
+                ERR_INTERNAL_SERVER_ERROR,
+                e,
+                logger=log,
+                context="process_audio endpoint"
+            )
+    """
+    if logger:
+        if context:
+            logger.error(f"[{context}] {error.message_en}: {raw_exception}")
+        else:
+            logger.error(f"{error.message_en}: {raw_exception}")
+
+    return create_error_response(error, partial_result)
 
 
 def create_success_response(
