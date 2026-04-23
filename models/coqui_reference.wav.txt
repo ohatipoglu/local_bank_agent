@@ -1,0 +1,9 @@
+{
+  "description": "Coqui XTTS v2 Reference Audio Placeholder",
+  "required_format": "WAV, 16-bit PCM, 22050 Hz, Mono",
+  "duration_seconds": "6-10",
+  "language": "Turkish",
+  "instructions": "Replace this file with a 6-10 second clean Turkish speech recording in WAV format.",
+  "how_to_record": "Use Audacity or any audio recorder. Speak clearly in Turkish for 6-10 seconds. Export as WAV (16-bit, 22050 Hz, mono).",
+  "fallback": "If this file is missing, Coqui XTTS will use its built-in default speaker voice."
+}

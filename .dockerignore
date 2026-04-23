@@ -1,0 +1,20 @@
+# Docker ignore file
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+.idea
+.vscode
+*.db
+logs.db
+*.wav
+*.mp3
+.env
+.env.*
+local-bank-tts-*.json
+models/*.onnx
+tests
+.pytest_cache
+htmlcov
+coverage.xml
