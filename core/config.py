@@ -43,9 +43,13 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     LLM_MODEL_NAME: str = "gemma4:26B-32K"
     LLM_BASE_URL: str = "http://localhost:11434"
-    LLM_TIMEOUT_SECONDS: int = 180
+    LLM_TIMEOUT_SECONDS: int = 180          # Health-check / model-list HTTP timeout
+    LLM_AGENT_TIMEOUT_SECONDS: int = 1800   # Agent inference timeout (local model: 6-9 min)
     LLM_TEMPERATURE: float = 0.1
     LLM_MAX_TOKENS: int = 1536
+
+    # SQLite file for persistent LangGraph conversation memory
+    AGENT_MEMORY_DB_PATH: str = "./agent_memory.db"
 
     # -----------------------------------------------------------------------
     # STT Settings (Faster-Whisper)
@@ -89,6 +93,13 @@ class Settings(BaseSettings):
     # Session Management
     # -----------------------------------------------------------------------
     SESSION_TTL_SECONDS: int = 3600  # 1 hour
+    MAX_SESSIONS: int = 10000
+
+    # -----------------------------------------------------------------------
+    # Services
+    # -----------------------------------------------------------------------
+    # Set to False in production to use real banking service implementations
+    USE_MOCK_SERVICES: bool = True
 
     # -----------------------------------------------------------------------
     # Logging
@@ -175,6 +186,20 @@ class Settings(BaseSettings):
 
         return errors
 
+    def validate_jwt_secret(self) -> list[str]:
+        """Warn if JWT_SECRET is a known default/weak value."""
+        errors = []
+        from infrastructure.mock_services import MockAuthService  # avoid circular import
+        secret = MockAuthService.JWT_SECRET
+        weak_defaults = {"dev-secret-key-change-in-production", "changeme", "secret"}
+        if secret in weak_defaults or len(secret) < 32:
+            errors.append(
+                "SECURITY WARNING: JWT_SECRET is weak or a known default. "
+                "Set a strong random value in .env — "
+                "generate with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        return errors
+
     def validate_all(self) -> list[str]:
         """
         Run all validation checks including Pydantic and custom validations.
@@ -185,6 +210,7 @@ class Settings(BaseSettings):
         # Pydantic validation is automatic on instantiation
         # Additional custom validations
         errors.extend(self.validate_google_credentials())
+        errors.extend(self.validate_jwt_secret())
 
         return errors
 
@@ -203,6 +229,7 @@ class Settings(BaseSettings):
             print("\n  ✅ All critical configuration values validated.")
 
         print(f"\n  LLM Model: {self.LLM_MODEL_NAME}")
+        print(f"  LLM Agent Timeout: {self.LLM_AGENT_TIMEOUT_SECONDS}s (local model)")
         print(f"  STT Model: {self.STT_MODEL_SIZE} ({self.STT_DEVICE})")
         print(f"  TTS Voice: {self.TTS_VOICE_NAME}")
         print(
@@ -218,6 +245,7 @@ class Settings(BaseSettings):
             f"  Rate Limit: {self.RATE_LIMIT_REQUESTS} req / {self.RATE_LIMIT_WINDOW_SECONDS}s"
         )
         print(f"  Max Audio: {self.MAX_AUDIO_SIZE_MB} MB")
+        print(f"  Mock Services: {'Yes (dev)' if self.USE_MOCK_SERVICES else 'No (production)'}")
         print(f"  API Key: {'Configured' if self.API_KEY else 'Not set'}")
         print(f"  CORS: {self.CORS_ORIGINS}")
         print("=" * 60 + "\n")

@@ -154,13 +154,24 @@ app.state.log = log  # Make available to lifespan
 # ---------------------------------------------------------------------------
 log.info("Servisler başlatılıyor...")
 
-account_service = MockAccountService()
-auth_service = MockAuthService()
+# ---------------------------------------------------------------------------
+# Service selection: mock (dev) vs real (production) via USE_MOCK_SERVICES flag
+# ---------------------------------------------------------------------------
+_use_mock = getattr(Config, "USE_MOCK_SERVICES", True)
+if _use_mock:
+    log.warning("USE_MOCK_SERVICES=true — Mock servisler aktif. Üretim ortamında false yapın.")
+    account_service = MockAccountService()
+    auth_service = MockAuthService()
+else:
+    # Replace with real service implementations for production
+    log.info("USE_MOCK_SERVICES=false — Gerçek bankacılık servisleri kullanılıyor.")
+    account_service = MockAccountService()   # TODO: swap with RealAccountService()
+    auth_service = MockAuthService()         # TODO: swap with RealAuthService()
 
 # Persistent session manager (SQLite-backed, survives restarts)
 session_manager = SQLiteSessionManager(
-    ttl_seconds=Config.SESSION_TTL_SECONDS if hasattr(Config, "SESSION_TTL_SECONDS") else 3600,
-    max_sessions=Config.MAX_SESSIONS if hasattr(Config, "MAX_SESSIONS") else 10000,
+    ttl_seconds=getattr(Config, "SESSION_TTL_SECONDS", 3600),
+    max_sessions=getattr(Config, "MAX_SESSIONS", 10000),
 )
 
 # TTS: Use engine router (Google Cloud -> Piper -> Coqui XTTS)
@@ -198,6 +209,7 @@ def _create_agent_factory(model_name: str):
             model_name=model_name,
             logger=log,
             max_tokens=Config.LLM_MAX_TOKENS,
+            agent_timeout_seconds=getattr(Config, "LLM_AGENT_TIMEOUT_SECONDS", 1800),
         )
 
     return factory

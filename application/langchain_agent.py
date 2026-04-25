@@ -3,21 +3,41 @@ LangChain/LangGraph banking agent with Ollama integration.
 Provides ReAct-style reasoning with banking tool calling.
 """
 
+import os
 import re
+import sqlite3
 
 import emoji
 import httpx
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from application.prompts import get_dynamic_prompt
-from application.tools_registry import BankToolsRegistry
+from application.tools_registry import BankToolsRegistry, reset_customer_id, set_customer_id
 from core.exceptions import AgentInitializationError
 from core.logger import get_correlated_logger
 from domain.interfaces import IAccountService
+
+# SQLite-backed persistent memory — survives application restarts.
+# Falls back to in-memory MemorySaver if package is not installed.
+try:
+    from langgraph.checkpoint.sqlite import SqliteSaver as _SqliteSaver
+    _SQLITE_AVAILABLE = True
+except ImportError:
+    from langgraph.checkpoint.memory import MemorySaver as _SqliteSaver  # type: ignore[assignment]
+    _SQLITE_AVAILABLE = False
+
+_AGENT_MEMORY_DB = os.getenv("AGENT_MEMORY_DB_PATH", "./agent_memory.db")
+
+
+def _build_memory():
+    """Create a persistent SqliteSaver (or MemorySaver fallback)."""
+    if _SQLITE_AVAILABLE:
+        conn = sqlite3.connect(_AGENT_MEMORY_DB, check_same_thread=False)
+        return _SqliteSaver(conn)
+    return _SqliteSaver()
 
 
 class LoguruCallbackHandler(BaseCallbackHandler):
@@ -62,19 +82,20 @@ class LangChainBankAgent:
 
     Features:
     - Dynamic strictness level (1-5) for behavioral control
-    - Session-based conversation memory
+    - Session-based conversation memory (SQLite-backed)
     - Emoji/markdown sanitization for TTS compatibility
     - Structured logging with correlation IDs
+    - customer_id passed via ContextVar (not system prompt) to prevent injection
     """
 
     # Compiled regex for response sanitization (performance optimization)
     _EMOJI_PATTERN = re.compile(r"[:;=]-?[)(DPOp]")
     _MARKDOWN_PATTERNS = [
-        (re.compile(r"#+\s*"), ""),  # Headers
-        (re.compile(r"\*\*(.*?)\*\*"), r"\1"),  # Bold **
-        (re.compile(r"\*(.*?)\*"), r"\1"),  # Italic *
-        (re.compile(r"__(.*?)__"), r"\1"),  # Bold __
-        (re.compile(r"_(.*?)_"), r"\1"),  # Italic _
+        (re.compile(r"#+\s*"), ""),              # Headers
+        (re.compile(r"\*\*(.*?)\*\*"), r"\1"),   # Bold **
+        (re.compile(r"\*(.*?)\*"), r"\1"),        # Italic *
+        (re.compile(r"__(.*?)__"), r"\1"),        # Bold __
+        (re.compile(r"_(.*?)_"), r"\1"),          # Italic _
         (re.compile(r"^\s*[-*+><]\s+", re.MULTILINE), ""),  # List items
     ]
 
@@ -84,16 +105,8 @@ class LangChainBankAgent:
         model_name: str,
         logger=None,
         max_tokens: int = 1536,
+        agent_timeout_seconds: int = 1800,
     ):
-        """
-        Initialize the banking agent.
-
-        Args:
-            account_service: Banking service implementation
-            model_name: Ollama model name (e.g., "gemma4:26B-32K")
-            logger: Loguru logger instance (auto-created if None)
-            max_tokens: Maximum response tokens
-        """
         self.log = logger or get_correlated_logger()
         self.model_name = model_name
         self.max_tokens = max_tokens
@@ -109,8 +122,9 @@ class LangChainBankAgent:
             self.log.info(f"Sisteme {len(self.tools)} adet bankacılık aracı yüklendi.")
 
             # 2. Configure LLM with Ollama
+            # Timeout is kept high intentionally — local model (Intel ARC iGPU) takes 6-9 min.
             callback = LoguruCallbackHandler(self.log)
-            timeout = httpx.Timeout(1800.0, connect=60.0)
+            timeout = httpx.Timeout(float(agent_timeout_seconds), connect=60.0)
 
             self.llm = ChatOllama(
                 model=model_name,
@@ -124,8 +138,11 @@ class LangChainBankAgent:
             )
             self.log.info("ChatOllama yüklendi. Tool Calling aktif.")
 
-            # 3. Create LangGraph agent with memory
-            self.memory = MemorySaver()
+            # 3. Create LangGraph agent with persistent SQLite memory
+            self.memory = _build_memory()
+            memory_type = "SqliteSaver" if _SQLITE_AVAILABLE else "MemorySaver (fallback)"
+            self.log.info(f"Konuşma hafızası: {memory_type} — {_AGENT_MEMORY_DB}")
+
             self.agent_executor = create_react_agent(
                 self.llm,
                 tools=self.tools,
@@ -148,11 +165,14 @@ class LangChainBankAgent:
         """
         Process a single conversation turn.
 
+        customer_id is injected via ContextVar (not the system prompt) to prevent
+        prompt injection attacks. Each thread/task gets an isolated context copy.
+
         Args:
             user_text: User's input text
             strictness_level: Behavioral control level (1-5)
             session_id: Unique session identifier (required)
-            customer_id: Verified customer ID (optional, defaults per tool)
+            customer_id: Verified customer ID — set into ContextVar, not the prompt
 
         Returns:
             Agent's response text
@@ -167,16 +187,13 @@ class LangChainBankAgent:
             f"Customer: {customer_id or 'doğrulanmamış'}"
         )
 
-        try:
-            # Build dynamic system prompt
-            dynamic_prompt = get_dynamic_prompt(strictness_level)
+        # Inject customer_id into ContextVar (isolated per thread — no prompt injection risk)
+        token = None
+        if customer_id:
+            token = set_customer_id(customer_id)
 
-            # Inject customer context if available
-            if customer_id:
-                dynamic_prompt += (
-                    f"\n\nMüşteri Kimliği: {customer_id}. "
-                    f"İşlemlerde bu müşteri kimliğini kullanın."
-                )
+        try:
+            dynamic_prompt = get_dynamic_prompt(strictness_level)
 
             messages = [
                 SystemMessage(content=dynamic_prompt),
@@ -187,7 +204,6 @@ class LangChainBankAgent:
 
             final_response = "Sizi tam olarak anlayamadım, tekrar edebilir misiniz?"
 
-            # Execute agent with fallback to streaming on error
             try:
                 response = self.agent_executor.invoke(inputs, config=config)
                 if isinstance(response, dict) and "messages" in response:
@@ -212,7 +228,6 @@ class LangChainBankAgent:
                         ):
                             final_response = last_message.content
 
-            # Sanitize response for TTS compatibility
             final_response = self._sanitize_response(final_response)
 
             self.log.info(
@@ -224,28 +239,17 @@ class LangChainBankAgent:
             self.log.error(f"LangChain İşlem Hatası: {e}")
             return "Sistemde geçici bir hata oluştu, lütfen daha sonra tekrar deneyin."
 
+        finally:
+            # Restore previous ContextVar state to keep threads clean
+            if token is not None:
+                reset_customer_id(token)
+
     @classmethod
     def _sanitize_response(cls, text: str) -> str:
-        """
-        Remove emojis, markdown, and formatting for TTS compatibility.
-
-        Args:
-            text: Raw agent response
-
-        Returns:
-            Cleaned plain text
-        """
-        # 1. Remove text-based emojis
+        """Remove emojis, markdown, and formatting for TTS compatibility."""
         text = cls._EMOJI_PATTERN.sub("", text)
-
-        # 2. Remove unicode emojis
         text = emoji.replace_emoji(text, replace="")
-
-        # 3. Remove markdown formatting
         for pattern, replacement in cls._MARKDOWN_PATTERNS:
             text = pattern.sub(replacement, text)
-
-        # 4. Normalize whitespace
         text = " ".join(text.split())
-
         return text

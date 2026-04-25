@@ -1,13 +1,36 @@
 """
 LangChain tool definitions for banking operations.
 Registry pattern for dynamic tool injection with dependency injection.
+
+Security: customer_id is passed via ContextVar, never through LLM-visible
+tool parameters, preventing prompt injection attacks.
 """
 
 from collections.abc import Callable
+from contextvars import ContextVar
 
 from langchain_core.tools import tool
 
 from domain.interfaces import IAccountService
+
+# ContextVar that holds the authenticated customer_id for the current request.
+# Set by LangChainBankAgent.handle_turn() before invoking the agent.
+# Each thread/task gets its own isolated copy via asyncio.to_thread context propagation.
+_current_customer_id: ContextVar[str] = ContextVar("current_customer_id", default="")
+
+
+def set_customer_id(customer_id: str):
+    """Set customer_id for the current execution context. Returns the reset token."""
+    return _current_customer_id.set(customer_id)
+
+
+def reset_customer_id(token) -> None:
+    """Reset customer_id to the previous value using the token from set_customer_id."""
+    _current_customer_id.reset(token)
+
+
+def _get_customer_id() -> str:
+    return _current_customer_id.get()
 
 
 class BankToolsRegistry:
@@ -15,47 +38,37 @@ class BankToolsRegistry:
     Registry for banking operation tools.
 
     Provides LangChain-compatible tools that wrap the account service
-    abstraction. New tools can be added without modifying agent logic.
+    abstraction. customer_id is read from a ContextVar (not from LLM parameters)
+    to prevent prompt injection.
 
     Tools:
     - get_balance: Query account balance
     - get_credit_card_debt: Query credit card debt
     - execute_eft: Transfer to another bank (via IBAN)
     - execute_havale: Same-bank transfer (via account number)
+    - get_transaction_history: Recent transaction list
+    - list_accounts: All customer accounts
+    - pay_credit_card: Pay credit card bill
     """
 
     def __init__(self, account_service: IAccountService):
-        """
-        Initialize tools registry with account service dependency.
-
-        Args:
-            account_service: Implementation of IAccountService
-        """
         self.account_service = account_service
         self.tools = self._initialize_tools()
 
     def get_tools(self) -> list[Callable]:
-        """
-        Get all registered banking tools.
-
-        Returns:
-            List of LangChain tool callables
-        """
         return self.tools
 
     def _initialize_tools(self) -> list[Callable]:
         """Define and register all banking tools."""
 
         @tool
-        def get_balance(customer_id: str) -> str:
+        def get_balance() -> str:
             """
             Müşterinin vadesiz hesap bakiyesini sorgular.
             Kullanıcı 'ne kadar param var', 'bakiyem nedir',
             'hesabımda ne kadar var' dediğinde bu aracı kullanın.
-
-            Args:
-                customer_id: Müşteri kimlik numarası (11 haneli)
             """
+            customer_id = _get_customer_id()
             if not self.account_service:
                 return "Servis hatası: Hesap servisine ulaşılamıyor."
             try:
@@ -68,15 +81,13 @@ class BankToolsRegistry:
                 return f"Bakiye sorgulama hatası: {str(e)}"
 
         @tool
-        def get_credit_card_debt(customer_id: str) -> str:
+        def get_credit_card_debt() -> str:
             """
             Müşterinin güncel kredi kartı borcunu ve son ödeme tarihini sorgular.
             Kullanıcı 'kredi kartı borcum ne kadar', 'kart ekstresi',
             'son ödeme tarihi ne zaman' dediğinde bu aracı kullanın.
-
-            Args:
-                customer_id: Müşteri kimlik numarası (11 haneli)
             """
+            customer_id = _get_customer_id()
             if not self.account_service:
                 return "Servis hatası: Hesap servisine ulaşılamıyor."
             try:
@@ -90,7 +101,7 @@ class BankToolsRegistry:
                 return f"Kredi kartı sorgulama hatası: {str(e)}"
 
         @tool
-        def execute_eft(iban: str, amount: float, customer_id: str) -> str:
+        def execute_eft(iban: str, amount: float) -> str:
             """
             Başka bir bankaya para gönderme (EFT) işlemi yapar.
             Kullanıcı EFT yapmak istediğinde bu aracı kullanın.
@@ -98,16 +109,14 @@ class BankToolsRegistry:
             Args:
                 iban: Hedef IBAN numarası (TR ile başlamalı)
                 amount: Gönderilecek tutar
-                customer_id: Müşteri kimlik numarası (11 haneli)
             """
+            customer_id = _get_customer_id()
             if not self.account_service:
                 return "Servis hatası: Hesap servisine ulaşılamıyor."
 
-            # Validate IBAN format
             if not iban or not iban.startswith("TR"):
                 return "Geçersiz IBAN formatı. IBAN TR ile başlamalıdır (örn: TR123456789012345678901234)."
 
-            # Validate amount
             if amount <= 0:
                 return "Geçersiz tutar. Pozitif bir miktar giriniz."
 
@@ -120,7 +129,7 @@ class BankToolsRegistry:
                 return f"EFT işlemi hatası: {str(e)}"
 
         @tool
-        def execute_havale(account_number: str, amount: float, customer_id: str) -> str:
+        def execute_havale(account_number: str, amount: float) -> str:
             """
             Aynı bankadaki başka bir hesaba para gönderme (Havale) işlemi yapar.
             Kullanıcı havale yapmak istediğinde bu aracı kullanın.
@@ -128,12 +137,11 @@ class BankToolsRegistry:
             Args:
                 account_number: Hedef hesap numarası
                 amount: Gönderilecek tutar
-                customer_id: Müşteri kimlik numarası (11 haneli)
             """
+            customer_id = _get_customer_id()
             if not self.account_service:
                 return "Servis hatası: Hesap servisine ulaşılamıyor."
 
-            # Validate amount
             if amount <= 0:
                 return "Geçersiz tutar. Pozitif bir miktar giriniz."
 
@@ -146,16 +154,16 @@ class BankToolsRegistry:
                 return f"Havale işlemi hatası: {str(e)}"
 
         @tool
-        def get_transaction_history(customer_id: str, limit: int = 10) -> str:
+        def get_transaction_history(limit: int = 5) -> str:
             """
             Müşterinin son işlemlerini getirir.
             Kullanıcı 'son işlemlerim', 'hesap hareketlerim',
             'işlem geçmişim' dediğinde bu aracı kullanın.
 
             Args:
-                customer_id: Müşteri kimlik numarası (11 haneli)
-                limit: Kaç işlem gösterileceği (varsayılan: 10)
+                limit: Kaç işlem gösterileceği (varsayılan: 5)
             """
+            customer_id = _get_customer_id()
             if not self.account_service:
                 return "Servis hatası: Hesap servisine ulaşılamıyor."
             try:
@@ -165,26 +173,26 @@ class BankToolsRegistry:
                 if not transactions:
                     return "Son dönemde hiç işlem bulunamadı."
 
-                result_lines = ["Son işlemleriniz:"]
+                # TTS-friendly: plain sentences instead of bullet list
+                parts = []
                 for txn in transactions:
-                    result_lines.append(
-                        f"- {txn['timestamp']}: {txn['type']} - "
-                        f"{txn['amount']:,.2f} {txn['currency']} ({txn['status']})"
+                    parts.append(
+                        f"{txn['timestamp']} tarihinde {txn['type']} işlemi, "
+                        f"{txn['amount']:,.2f} {txn['currency']}, durum: {txn['status']}"
                     )
-                return "\n".join(result_lines)
+                intro = f"Son {len(transactions)} işleminiz şu şekilde:"
+                return intro + ". " + ". ".join(parts) + "."
             except Exception as e:
                 return f"İşlem geçmişi sorgulama hatası: {str(e)}"
 
         @tool
-        def list_accounts(customer_id: str) -> str:
+        def list_accounts() -> str:
             """
             Müşterinin tüm hesaplarını listeler.
             Kullanıcı 'hesaplarım neler', 'tüm hesaplarım',
             'hangi hesaplarım var' dediğinde bu aracı kullanın.
-
-            Args:
-                customer_id: Müşteri kimlik numarası (11 haneli)
             """
+            customer_id = _get_customer_id()
             if not self.account_service:
                 return "Servis hatası: Hesap servisine ulaşılamıyor."
             try:
@@ -192,48 +200,49 @@ class BankToolsRegistry:
                 if not accounts:
                     return "Hiç hesap bulunamadı."
 
-                result_lines = ["Hesaplarınız:"]
+                # TTS-friendly: plain sentences
+                parts = []
                 for account in accounts:
-                    result_lines.append(
-                        f"- {account['account_type']}: {account['balance']:,.2f} {account['currency']}"
+                    parts.append(
+                        f"{account['account_type']} hesabınızda "
+                        f"{account['balance']:,.2f} {account['currency']} bulunmaktadır"
                     )
-                return "\n".join(result_lines)
+                return ". ".join(parts) + "."
             except Exception as e:
                 return f"Hesap listeleme hatası: {str(e)}"
 
         @tool
-        def pay_credit_card(customer_id: str, amount: float = None) -> str:
+        def pay_credit_card(amount: float = None) -> str:
             """
             Kredi kartı borcu öder.
             Kullanıcı 'kredi kartı borcumu öde', 'kart borcunu yatır'
             dediğinde bu aracı kullanın.
 
             Args:
-                customer_id: Müşteri kimlik numarası (11 haneli)
-                amount: Ödenecek tutar (None = tam borç)
+                amount: Ödenecek tutar (belirtilmezse tam borç ödenir)
             """
+            customer_id = _get_customer_id()
             if not self.account_service:
                 return "Servis hatası: Hesap servisine ulaşılamıyor."
 
             try:
-                # Get current debt first
                 debt_info = self.account_service.get_credit_card_debt(customer_id)
                 current_debt = debt_info.get("debt", 0)
 
                 if current_debt <= 0:
                     return "Kredi kartı borcunuz bulunmuyor."
 
-                # If no amount specified, pay full debt
                 if amount is None:
                     amount = current_debt
 
-                # Validate amount against current debt
                 if amount > current_debt:
-                    return f"Ödeme tutarı borçtan fazla olamaz. Güncel borç: {current_debt:,.2f} {debt_info.get('currency', 'TRY')}"
+                    return (
+                        f"Ödeme tutarı borçtan fazla olamaz. "
+                        f"Güncel borç: {current_debt:,.2f} {debt_info.get('currency', 'TRY')}"
+                    )
 
                 result = self.account_service.pay_credit_card(customer_id, amount)
-                
-                # Check if it returned an error (like invalid amount)
+
                 if isinstance(result, dict) and result.get("status") == "error":
                     return result.get("message", "Geçersiz işlem.")
 
