@@ -2,9 +2,9 @@
 Tests for security module (rate limiter, input validation).
 """
 import time
-import pytest
-from core.security import RateLimiter, validate_audio_upload
 from unittest.mock import MagicMock
+
+from core.security import RateLimiter, validate_audio_upload
 
 
 class TestRateLimiter:

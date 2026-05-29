@@ -9,6 +9,7 @@ import sqlite3
 
 import emoji
 import httpx
+from contextvars import ContextVar
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
@@ -30,6 +31,7 @@ except ImportError:
     _SQLITE_AVAILABLE = False
 
 _AGENT_MEMORY_DB = os.getenv("AGENT_MEMORY_DB_PATH", "./agent_memory.db")
+_current_strictness_level: ContextVar[int] = ContextVar("current_strictness_level", default=3)
 
 
 def _build_memory():
@@ -106,6 +108,7 @@ class LangChainBankAgent:
         logger=None,
         max_tokens: int = 1536,
         agent_timeout_seconds: int = 1800,
+        retriever=None,
     ):
         self.log = logger or get_correlated_logger()
         self.model_name = model_name
@@ -117,7 +120,7 @@ class LangChainBankAgent:
 
         try:
             # 1. Register banking tools
-            registry = BankToolsRegistry(account_service)
+            registry = BankToolsRegistry(account_service, retriever=retriever)
             self.tools = registry.get_tools()
             self.log.info(f"Sisteme {len(self.tools)} adet bankacılık aracı yüklendi.")
 
@@ -143,10 +146,17 @@ class LangChainBankAgent:
             memory_type = "SqliteSaver" if _SQLITE_AVAILABLE else "MemorySaver (fallback)"
             self.log.info(f"Konuşma hafızası: {memory_type} — {_AGENT_MEMORY_DB}")
 
+            def custom_prompt_modifier(state):
+                cleaned_messages = [msg for msg in state["messages"] if msg.type != "system"]
+                lvl = _current_strictness_level.get()
+                dynamic_prompt = get_dynamic_prompt(lvl)
+                return [SystemMessage(content=dynamic_prompt)] + cleaned_messages
+
             self.agent_executor = create_react_agent(
                 self.llm,
                 tools=self.tools,
                 checkpointer=self.memory,
+                prompt=custom_prompt_modifier,
             )
             self.log.info("Agent Executor başarıyla oluşturuldu.")
 
@@ -192,14 +202,11 @@ class LangChainBankAgent:
         if customer_id:
             token = set_customer_id(customer_id)
 
-        try:
-            dynamic_prompt = get_dynamic_prompt(strictness_level)
+        # Set strictness level in ContextVar
+        strictness_token = _current_strictness_level.set(strictness_level)
 
-            messages = [
-                SystemMessage(content=dynamic_prompt),
-                HumanMessage(content=user_text),
-            ]
-            inputs = {"messages": messages}
+        try:
+            inputs = {"messages": [HumanMessage(content=user_text)]}
             config = {"configurable": {"thread_id": session_id}}
 
             final_response = "Sizi tam olarak anlayamadım, tekrar edebilir misiniz?"
@@ -243,6 +250,8 @@ class LangChainBankAgent:
             # Restore previous ContextVar state to keep threads clean
             if token is not None:
                 reset_customer_id(token)
+            if strictness_token is not None:
+                _current_strictness_level.reset(strictness_token)
 
     @classmethod
     def _sanitize_response(cls, text: str) -> str:
@@ -253,3 +262,13 @@ class LangChainBankAgent:
             text = pattern.sub(replacement, text)
         text = " ".join(text.split())
         return text
+
+    def close(self) -> None:
+        """Close memory database connection if active to prevent descriptor leaks."""
+        if hasattr(self, "memory") and self.memory:
+            if hasattr(self.memory, "conn") and self.memory.conn:
+                try:
+                    self.memory.conn.close()
+                    self.log.info("Agent veritabanı bağlantısı kapatıldı.")
+                except Exception as e:
+                    self.log.error(f"Agent veritabanı kapatma hatası: {e}")

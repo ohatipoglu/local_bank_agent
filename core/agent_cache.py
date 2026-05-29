@@ -108,6 +108,12 @@ class AgentCache:
         """
         with self._lock:
             if model_name in self._cache:
+                entry = self._cache[model_name]
+                if hasattr(entry.agent, "close"):
+                    try:
+                        entry.agent.close()
+                    except Exception:
+                        pass
                 del self._cache[model_name]
                 return True
             return False
@@ -115,6 +121,12 @@ class AgentCache:
     def clear(self):
         """Clear all cached entries."""
         with self._lock:
+            for entry in self._cache.values():
+                if hasattr(entry.agent, "close"):
+                    try:
+                        entry.agent.close()
+                    except Exception:
+                        pass
             self._cache.clear()
 
     def get_stats(self) -> dict[str, Any]:
@@ -142,6 +154,12 @@ class AgentCache:
             return
 
         oldest_key = min(self._cache.keys(), key=lambda k: self._cache[k].last_accessed)
+        entry = self._cache[oldest_key]
+        if hasattr(entry.agent, "close"):
+            try:
+                entry.agent.close()
+            except Exception:
+                pass
         del self._cache[oldest_key]
         self._stats["evictions"] += 1
 

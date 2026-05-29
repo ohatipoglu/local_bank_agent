@@ -1,20 +1,22 @@
 import os
-import yaml
 from functools import lru_cache
-from typing import Dict, Any
+from typing import Any
+
+import yaml
+
 
 # Uzman Tavsiyesi: Cache (Önbellek) Mekanizması Eklendi
 @lru_cache(maxsize=1)
-def load_prompts_from_yaml() -> Dict[str, Any]:
+def load_prompts_from_yaml() -> dict[str, Any]:
     """
     prompts.yaml dosyasını okur ve bellekte tutar.
     Sadece ilk çağrıda disk I/O işlemi yapar.
     Hata yönetimi eklendi.
     """
     yaml_path = os.path.join(os.path.dirname(__file__), "prompts.yaml")
-    
+
     try:
-        with open(yaml_path, 'r', encoding='utf-8') as file:
+        with open(yaml_path, encoding='utf-8') as file:
             return yaml.safe_load(file)
     except FileNotFoundError:
         # Fallback (Yedek) prompt'lar
@@ -40,13 +42,13 @@ def get_dynamic_prompt(strictness_level: int) -> str:
     dinamik sistem promptunu oluşturur.
     """
     prompts = load_prompts_from_yaml()
-        
+
     base_prompt = prompts.get("base_prompt", "")
     empathy_rule = prompts.get("empathy_rule", "")
     strictness_levels = prompts.get("strictness_levels", {})
-    
+
     kural = strictness_levels.get(strictness_level, "Varsayılan bankacılık asistanı kurallarıyla hareket et.")
-    
+
     # Uzman Tavsiyesi: Empati kuralını seviye 4 (Katı) ve 5 (Çok Katı) için kaldır.
     if strictness_level >= 4:
         return f"{base_prompt}\n{kural}"

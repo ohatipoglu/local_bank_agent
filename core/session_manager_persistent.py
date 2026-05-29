@@ -9,11 +9,12 @@ The in-memory version is still available at core.session_manager for dev/testing
 import json
 import os
 import sqlite3
-import threading
+import asyncio
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Any
+import aiosqlite
 
 from core.exceptions import AuthenticationError, SessionError
 
@@ -68,8 +69,8 @@ class SQLiteSessionManager:
 
     Usage:
         session_mgr = SQLiteSessionManager(db_path="sessions.db")
-        session = session_mgr.create_session("unique-id")
-        session_mgr.authenticate_session("unique-id", "12345678901")
+        session = await session_mgr.create_session("unique-id")
+        await session_mgr.authenticate_session("unique-id", "12345678901")
     """
 
     # SQL schema for sessions table
@@ -115,41 +116,40 @@ class SQLiteSessionManager:
         self.db_path = db_path
         self.ttl_seconds = ttl_seconds
         self.max_sessions = max_sessions
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
         # Ensure directory exists
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
         # Initialize database
-        self._init_db()
+        self._init_db_sync()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Get a database connection with WAL mode enabled."""
+    def _init_db_sync(self):
+        """Initialize database schema synchronously."""
         conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        return conn
-
-    @contextmanager
-    def _transaction(self):
-        """Context manager for database transactions."""
-        conn = self._get_connection()
         try:
-            yield conn
+            conn.executescript(self._SCHEMA)
             conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
         finally:
             conn.close()
 
-    def _init_db(self):
-        """Initialize database schema."""
-        with self._transaction() as conn:
-            conn.executescript(self._SCHEMA)
+    @asynccontextmanager
+    async def _transaction(self):
+        """Async context manager for database transactions."""
+        conn = await aiosqlite.connect(self.db_path, timeout=10)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA synchronous=NORMAL")
+        try:
+            yield conn
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+        finally:
+            await conn.close()
 
-    def create_session(self, session_id: str) -> SessionState:
+    async def create_session(self, session_id: str) -> SessionState:
         """
         Create a new session.
 
@@ -162,29 +162,30 @@ class SQLiteSessionManager:
         Raises:
             SessionError: If maximum session limit reached
         """
-        with self._lock:
+        async with self._lock:
             now = time.time()
 
             # Cleanup expired sessions first
-            self._cleanup_expired()
+            await self._cleanup_expired()
 
             # Check session limit
-            with self._transaction() as conn:
-                cursor = conn.execute("SELECT COUNT(*) as cnt FROM sessions")
-                count = cursor.fetchone()["cnt"]
-                if count >= self.max_sessions:
-                    raise SessionError(
-                        f"Maximum session limit reached ({self.max_sessions}). "
-                        "Please wait and try again."
-                    )
+            async with self._transaction() as conn:
+                async with conn.execute("SELECT COUNT(*) as cnt FROM sessions") as cursor:
+                    row = await cursor.fetchone()
+                    count = row["cnt"] if row else 0
+                    if count >= self.max_sessions:
+                        raise SessionError(
+                            f"Maximum session limit reached ({self.max_sessions}). "
+                            "Please wait and try again."
+                        )
 
             # Create session
             session = SessionState(
                 session_id=session_id, created_at=now, last_accessed=now
             )
 
-            with self._transaction() as conn:
-                conn.execute(
+            async with self._transaction() as conn:
+                await conn.execute(
                     """
                     INSERT INTO sessions (
                         session_id, customer_id, is_authenticated,
@@ -204,7 +205,7 @@ class SQLiteSessionManager:
 
             return session
 
-    def get_session(self, session_id: str) -> SessionState | None:
+    async def get_session(self, session_id: str) -> SessionState | None:
         """
         Retrieve an existing session.
 
@@ -214,37 +215,37 @@ class SQLiteSessionManager:
         Returns:
             SessionState if found and not expired, None otherwise
         """
-        with self._lock:
-            with self._transaction() as conn:
-                cursor = conn.execute(
+        async with self._lock:
+            async with self._transaction() as conn:
+                async with conn.execute(
                     "SELECT * FROM sessions WHERE session_id = ?",
                     (session_id,),
-                )
-                row = cursor.fetchone()
+                ) as cursor:
+                    row = await cursor.fetchone()
 
-                if row is None:
-                    return None
+                    if row is None:
+                        return None
 
-                session = SessionState.from_row(dict(row))
+                    session = SessionState.from_row(dict(row))
 
-                # Check expiration
-                if session.is_expired(self.ttl_seconds):
-                    conn.execute(
-                        "DELETE FROM sessions WHERE session_id = ?",
-                        (session_id,),
+                    # Check expiration
+                    if session.is_expired(self.ttl_seconds):
+                        await conn.execute(
+                            "DELETE FROM sessions WHERE session_id = ?",
+                            (session_id,),
+                        )
+                        return None
+
+                    # Update last_accessed
+                    session.touch()
+                    await conn.execute(
+                        "UPDATE sessions SET last_accessed = ? WHERE session_id = ?",
+                        (session.last_accessed, session_id),
                     )
-                    return None
 
-                # Update last_accessed
-                session.touch()
-                conn.execute(
-                    "UPDATE sessions SET last_accessed = ? WHERE session_id = ?",
-                    (session.last_accessed, session_id),
-                )
+                    return session
 
-                return session
-
-    def authenticate_session(self, session_id: str, customer_id: str) -> bool:
+    async def authenticate_session(self, session_id: str, customer_id: str) -> bool:
         """
         Bind a customer identity to a session.
 
@@ -259,53 +260,53 @@ class SQLiteSessionManager:
             SessionError: If session not found or expired
             AuthenticationError: If customer ID validation fails
         """
-        with self._lock:
-            with self._transaction() as conn:
-                cursor = conn.execute(
+        async with self._lock:
+            async with self._transaction() as conn:
+                async with conn.execute(
                     "SELECT * FROM sessions WHERE session_id = ?",
                     (session_id,),
-                )
-                row = cursor.fetchone()
+                ) as cursor:
+                    row = await cursor.fetchone()
 
-                if row is None:
-                    raise SessionError(f"Session not found: {session_id}")
+                    if row is None:
+                        raise SessionError(f"Session not found: {session_id}")
 
-                session = SessionState.from_row(dict(row))
+                    session = SessionState.from_row(dict(row))
 
-                if session.is_expired(self.ttl_seconds):
-                    conn.execute(
-                        "DELETE FROM sessions WHERE session_id = ?",
-                        (session_id,),
+                    if session.is_expired(self.ttl_seconds):
+                        await conn.execute(
+                            "DELETE FROM sessions WHERE session_id = ?",
+                            (session_id,),
+                        )
+                        raise SessionError("Session expired")
+
+                    # Import TC Kimlik validator
+                    from core.tc_kimlik_validator import validate_tc_kimlik
+
+                    # Validate TC Kimlik algorithmically
+                    if not customer_id or not validate_tc_kimlik(customer_id):
+                        raise AuthenticationError(
+                            "Geçersiz TC Kimlik numarası. "
+                            "11 haneli geçerli bir numara giriniz."
+                        )
+
+                    # Update session
+                    session.customer_id = customer_id
+                    session.is_authenticated = True
+                    session.touch()
+
+                    await conn.execute(
+                        """
+                        UPDATE sessions
+                        SET customer_id = ?, is_authenticated = 1, last_accessed = ?
+                        WHERE session_id = ?
+                        """,
+                        (customer_id, session.last_accessed, session_id),
                     )
-                    raise SessionError("Session expired")
 
-                # Import TC Kimlik validator
-                from core.tc_kimlik_validator import validate_tc_kimlik
+                    return True
 
-                # Validate TC Kimlik algorithmically
-                if not customer_id or not validate_tc_kimlik(customer_id):
-                    raise AuthenticationError(
-                        "Geçersiz TC Kimlik numarası. "
-                        "11 haneli geçerli bir numara giriniz."
-                    )
-
-                # Update session
-                session.customer_id = customer_id
-                session.is_authenticated = True
-                session.touch()
-
-                conn.execute(
-                    """
-                    UPDATE sessions
-                    SET customer_id = ?, is_authenticated = 1, last_accessed = ?
-                    WHERE session_id = ?
-                    """,
-                    (customer_id, session.last_accessed, session_id),
-                )
-
-                return True
-
-    def update_context(self, session_id: str, key: str, value: Any):
+    async def update_context(self, session_id: str, key: str, value: Any):
         """
         Update conversation context data.
 
@@ -314,12 +315,12 @@ class SQLiteSessionManager:
             key: Context key
             value: Context value
         """
-        session = self.get_session(session_id)
+        session = await self.get_session(session_id)
         if session:
             session.conversation_context[key] = value
-            with self._lock:
-                with self._transaction() as conn:
-                    conn.execute(
+            async with self._lock:
+                async with self._transaction() as conn:
+                    await conn.execute(
                         """
                         UPDATE sessions SET conversation_context = ?, last_accessed = ?
                         WHERE session_id = ?
@@ -331,7 +332,7 @@ class SQLiteSessionManager:
                         ),
                     )
 
-    def get_context(self, session_id: str, key: str, default: Any = None) -> Any:
+    async def get_context(self, session_id: str, key: str, default: Any = None) -> Any:
         """
         Get conversation context data.
 
@@ -343,12 +344,12 @@ class SQLiteSessionManager:
         Returns:
             Context value or default
         """
-        session = self.get_session(session_id)
+        session = await self.get_session(session_id)
         if session:
             return session.conversation_context.get(key, default)
         return default
 
-    def delete_session(self, session_id: str) -> bool:
+    async def delete_session(self, session_id: str) -> bool:
         """
         Delete a session.
 
@@ -358,48 +359,51 @@ class SQLiteSessionManager:
         Returns:
             True if session was deleted
         """
-        with self._lock:
-            with self._transaction() as conn:
-                cursor = conn.execute(
+        async with self._lock:
+            async with self._transaction() as conn:
+                async with conn.execute(
                     "DELETE FROM sessions WHERE session_id = ?",
                     (session_id,),
-                )
-                return cursor.rowcount > 0
+                ) as cursor:
+                    rowcount = cursor.rowcount
+                    return rowcount > 0
 
-    def _cleanup_expired(self):
+    async def _cleanup_expired(self):
         """Remove all expired sessions."""
         cutoff = time.time() - self.ttl_seconds
-        with self._transaction() as conn:
-            conn.execute(
+        async with self._transaction() as conn:
+            await conn.execute(
                 "DELETE FROM sessions WHERE last_accessed < ?",
                 (cutoff,),
             )
 
-    def get_stats(self) -> dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         """
         Get session manager statistics.
 
         Returns:
             Dictionary with session statistics
         """
-        with self._lock:
+        async with self._lock:
             # Cleanup first
-            self._cleanup_expired()
+            await self._cleanup_expired()
 
-            with self._transaction() as conn:
-                cursor = conn.execute("SELECT COUNT(*) as cnt FROM sessions")
-                total = cursor.fetchone()["cnt"]
+            async with self._transaction() as conn:
+                async with conn.execute("SELECT COUNT(*) as cnt FROM sessions") as cursor:
+                    row = await cursor.fetchone()
+                    total = row["cnt"] if row else 0
 
-                cursor = conn.execute(
+                async with conn.execute(
                     "SELECT COUNT(*) as cnt FROM sessions WHERE is_authenticated = 1"
-                )
-                authenticated = cursor.fetchone()["cnt"]
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    authenticated = row["cnt"] if row else 0
 
-                cursor = conn.execute(
+                async with conn.execute(
                     "SELECT MIN(last_accessed) as min_ts FROM sessions"
-                )
-                row = cursor.fetchone()
-                oldest = row["min_ts"] if row and row["min_ts"] else None
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    oldest = row["min_ts"] if row and row["min_ts"] else None
 
                 return {
                     "active_sessions": total,
@@ -411,12 +415,12 @@ class SQLiteSessionManager:
                     "db_path": self.db_path,
                 }
 
-    def cleanup_all(self):
+    async def cleanup_all(self):
         """Manually cleanup all expired sessions."""
-        with self._lock:
-            self._cleanup_expired()
+        async with self._lock:
+            await self._cleanup_expired()
 
-    def close(self):
+    async def close(self):
         """Close the session manager (cleanup resources)."""
-        # SQLite connections are closed per-transaction, nothing to cleanup
+        pass   # SQLite connections are closed per-transaction, nothing to cleanup
         pass

@@ -1,0 +1,26 @@
+[
+  {
+    "question": "EFT ve Havale günlük işlem limitleri nedir?",
+    "answer": "Günlük EFT işlem limiti 250.000 TL'dir. Günlük Havale işlem limiti ise 500.000 TL'dir. FAST (Hızlı Para Transferi) işlem limiti ise tek seferde maksimum 100.000 TL'dir."
+  },
+  {
+    "question": "Para transferi işlem saatleri nelerdir?",
+    "answer": "EFT işlemleri sadece iş günlerinde saat 09:00 ile 17:00 arasında gerçekleştirilebilir. Havale ve FAST işlemleri ise haftanın 7 günü 24 saati anlık olarak yapılabilmektedir."
+  },
+  {
+    "question": "EFT, Havale ve FAST işlem ücretleri (komisyonları) ne kadardır?",
+    "answer": "Havale işlemleri tamamen ücretsizdir (0 TL). FAST işlem ücreti transfer başına 2 TL'dir. EFT ücreti ise standart saatlerde (09:00 - 16:00) 5 TL, geç saatlerde (16:00 - 17:00) yapıldığında ise 7.5 TL'dir."
+  },
+  {
+    "question": "Vadeli hesap mevduat faiz oranları nedir?",
+    "answer": "32 günlük vadeli hesaplar için yıllık faiz oranları şu şekildedir: Türk Lirası (TL) için yıllık faiz oranı %45, Amerikan Doları (USD) için yıllık faiz oranı %2, Euro (EUR) için yıllık faiz oranı %1.5'tir."
+  },
+  {
+    "question": "Kredi kartı nakit avans ücreti ve akdi faiz oranları nedir?",
+    "answer": "Kredi kartından nakit avans çekimlerinde çekilen tutarın %5'i oranında komisyon alınır. Kredi kartı borcu asgari tutarı ödendikten sonra kalan borç için aylık akdi faiz oranı %4.25 olarak uygulanmaktadır."
+  },
+  {
+    "question": "Hesap işletim ücreti var mıdır ve vadesiz hesap açılışı ücretli midir?",
+    "answer": "Vadesiz hesap açılışları tamamen ücretsizdir. Bankamızda hiçbir vadesiz veya vadeli hesap için hesap işletim ücreti veya yıllık üyelik aidatı alınmamaktadır."
+  }
+]

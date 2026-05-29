@@ -21,6 +21,19 @@ Requires:
 
 import os
 import sys
+
+# Force UTF-8 encoding for standard streams on Windows to prevent UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import warnings
 
 import torch
@@ -79,28 +92,125 @@ def synthesize(text: str, output_file: str, speaker_wav: str = None):
         return False
 
 
+def run_server(host="127.0.0.1", port=8001):
+    """Run persistent Flask server for Coqui XTTS v2 synthesis."""
+    from flask import Flask, request, Response, jsonify
+    from TTS.api import TTS
+    import tempfile
+    import os
+
+    app = Flask(__name__)
+
+    # Determine device
+    use_gpu = torch.cuda.is_available()
+    device = "cuda" if use_gpu else "cpu"
+
+    print(f"Loading XTTS v2 model on {device} (Flask Server)...", file=sys.stderr)
+    try:
+        tts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+        print("XTTS v2 model loaded successfully. Server starting...", file=sys.stderr)
+    except Exception as e:
+        print(f"Failed to load XTTS v2 model: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    @app.route("/health", methods=["GET"])
+    def health():
+        return jsonify({"status": "ready", "device": device})
+
+    @app.route("/synthesize", methods=["POST"])
+    def synthesize_endpoint():
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({"error": "Invalid JSON"}), 400
+
+            text = data.get("text", "").strip()
+            speaker_wav = data.get("speaker_wav")
+
+            if not text:
+                return jsonify({"error": "Empty text provided"}), 400
+
+            # Create temporary WAV output file
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
+            os.close(temp_fd)
+
+            try:
+                if speaker_wav and os.path.exists(speaker_wav):
+                    tts.tts_to_file(
+                        text=text,
+                        file_path=temp_path,
+                        speaker_wav=speaker_wav,
+                        language="tr"
+                    )
+                else:
+                    if hasattr(tts, "speakers") and tts.speakers and len(tts.speakers) > 0:
+                        speaker_name = tts.speakers[0]
+                        tts.tts_to_file(
+                            text=text,
+                            file_path=temp_path,
+                            speaker=speaker_name,
+                            language="tr"
+                        )
+                    else:
+                        return jsonify({"error": "No speaker_wav provided and no default speaker found"}), 400
+
+                if os.path.exists(temp_path):
+                    with open(temp_path, "rb") as f:
+                        wav_bytes = f.read()
+                    return Response(wav_bytes, mimetype="audio/wav")
+                else:
+                    return jsonify({"error": "Failed to generate output file"}), 500
+
+            finally:
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+
+        except Exception as err:
+            return jsonify({"error": str(err)}), 500
+
+    app.run(host=host, port=port, debug=False, threaded=True)
+
+
 def main():
-    """Main entry point for subprocess call."""
+    """Main entry point for CLI or server."""
+    if "--server" in sys.argv:
+        host = "127.0.0.1"
+        port = 8001
+
+        # Parse potential --host and --port arguments
+        for i, arg in enumerate(sys.argv):
+            if arg == "--host" and i + 1 < len(sys.argv):
+                host = sys.argv[i + 1]
+            elif arg == "--port" and i + 1 < len(sys.argv):
+                port = int(sys.argv[i + 1])
+
+        run_server(host, port)
+        sys.exit(0)
+
+    # Original CLI logic
     if len(sys.argv) < 3:
         print(
-            "Usage: python coqui_tts_server.py <text> <output_file> [speaker_wav]",
+            "Usage: python coqui_tts_server.py <text> <output_file> [speaker_wav] or python coqui_tts_server.py --server [--host <host>] [--port <port>]",
             file=sys.stderr,
         )
         sys.exit(1)
 
     text_arg = sys.argv[1]
-    
+
     if text_arg.startswith("FILE:"):
         file_path = text_arg[5:]
         if os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 text = f.read().strip()
         else:
             print(f"Error: Text file not found: {file_path}", file=sys.stderr)
             sys.exit(1)
     else:
         text = text_arg
-        
+
     output_file = sys.argv[2]
     speaker_wav = sys.argv[3] if len(sys.argv) > 3 else None
 

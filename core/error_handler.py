@@ -273,3 +273,39 @@ def create_success_response(
     if processing_times:
         response["processing_times"] = processing_times
     return response
+
+
+import asyncio
+
+def execute_with_fallback(primary_fn, fallback_fn, logger=None, context=""):
+    """
+    Executes a primary function. If it fails, logs the error and executes the fallback function.
+    """
+    try:
+        return primary_fn()
+    except Exception as e:
+        if logger:
+            logger.warning(f"Primary engine failed in context '{context}': {e}. Triggering fallback...")
+        try:
+            return fallback_fn()
+        except Exception as fe:
+            if logger:
+                logger.error(f"Fallback engine also failed in context '{context}': {fe}")
+            raise fe
+
+
+async def execute_with_fallback_async(primary_fn, fallback_fn, logger=None, context=""):
+    """
+    Executes a primary async function. If it fails, logs the error and executes the fallback function.
+    """
+    try:
+        return await primary_fn()
+    except Exception as e:
+        if logger:
+            logger.warning(f"Primary async engine failed in context '{context}': {e}. Triggering fallback...")
+        try:
+            return await fallback_fn()
+        except Exception as fe:
+            if logger:
+                logger.error(f"Fallback async engine also failed in context '{context}': {fe}")
+            raise fe

@@ -53,16 +53,13 @@ from core.agent_cache import agent_cache
 from core.auth_middleware import AuthenticationMiddleware, setup_cors_middleware
 from core.config import Config
 from core.error_handler import (
-    ERR_AGENT_NOT_INITIALIZED,
-    ERR_INVALID_TC,
     ERR_INTERNAL_SERVER_ERROR,
+    ERR_INVALID_TC,
     ERR_SESSION_EXPIRED,
-    ERR_SESSION_NOT_FOUND,
     ErrorCategory,
     ErrorCode,
     ProcessingError,
     create_error_response,
-    create_success_response,
     handle_exception,
 )
 from core.exceptions import (
@@ -89,20 +86,158 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 # ---------------------------------------------------------------------------
+# Globals (initialized in lifespan to avoid double loading on uvicorn reload)
+# ---------------------------------------------------------------------------
+account_service = None
+auth_service = None
+session_manager = None
+tts_engine = None
+stt_engine = None
+audio_processor = None
+
+
+# ---------------------------------------------------------------------------
 # Lifespan events (startup/shutdown)
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
+    global account_service, auth_service, session_manager, tts_engine, stt_engine, audio_processor
+
     # Startup
     Config.print_summary()
     app.state.log.info("🚀 Local Bank AI Agent başlatılıyor...")
+    app.state.log.info("Servisler başlatılıyor...")
+
+    # Start Coqui daemon server asynchronously
+    app.state.coqui_process = None
+    try:
+        from infrastructure.tts_engine import _get_coqui_python_executable
+        coqui_python = _get_coqui_python_executable(app.state.log)
+        server_script = os.path.join(current_dir, "coqui_tts_server.py")
+        if coqui_python and os.path.exists(server_script):
+            app.state.log.info("Coqui XTTS yerel servisi başlatılıyor...")
+            host = Config.COQUI_SERVER_HOST
+            port = str(Config.COQUI_SERVER_PORT)
+
+            import subprocess
+            coqui_env_vars = os.environ.copy()
+            coqui_env_vars["PYTHONIOENCODING"] = "utf-8"
+            coqui_env_vars["PYTHONUTF8"] = "1"
+
+            app.state.coqui_process = subprocess.Popen(
+                [coqui_python, server_script, "--server", "--host", host, "--port", port],
+                cwd=current_dir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=coqui_env_vars,
+            )
+            app.state.log.info(f"Coqui XTTS yerel servisi arka planda başlatıldı (PID: {app.state.coqui_process.pid}).")
+        else:
+            app.state.log.warning("Coqui python executable veya sunucu scripti bulunamadı. Servis başlatılamadı.")
+    except Exception as e:
+        app.state.log.error(f"Coqui yerel servisi başlatılamadı: {e}")
+
+    # Service selection: mock (dev) vs real (production) via USE_MOCK_SERVICES flag
+    _use_mock = getattr(Config, "USE_MOCK_SERVICES", True)
+    if _use_mock:
+        app.state.log.warning("USE_MOCK_SERVICES=true — Mock servisler aktif. Üretim ortamında false yapın.")
+        account_service = MockAccountService()
+        auth_service = MockAuthService()
+    else:
+        # Replace with real service implementations for production
+        app.state.log.info("USE_MOCK_SERVICES=false — Gerçek bankacılık servisleri kullanılıyor.")
+        account_service = MockAccountService()   # TODO: swap with RealAccountService()
+        auth_service = MockAuthService()         # TODO: swap with RealAuthService()
+
+    # Persistent session manager (SQLite-backed, survives restarts)
+    session_manager = SQLiteSessionManager(
+        ttl_seconds=getattr(Config, "SESSION_TTL_SECONDS", 3600),
+        max_sessions=getattr(Config, "MAX_SESSIONS", 10000),
+    )
+
+    # TTS: Use engine router (Google Cloud -> Piper -> Coqui XTTS)
+    tts_engine = TTSEngineRouter(logger=app.state.log)
+
+    # STT
+    app.state.log.info("Whisper modeli yükleniyor...")
+    stt_engine = FasterWhisperSTTEngine(
+        logger=app.state.log,
+        model_size=Config.STT_MODEL_SIZE,
+        device=Config.STT_DEVICE,
+        compute_type=Config.STT_COMPUTE_TYPE,
+    )
+
+    # Lazy-loaded inside routes previously, now initialized centrally
+    from application.langchain_agent import LangChainBankAgent
+    from services.audio_processor import AsyncAudioProcessor
+    from infrastructure.knowledge_base import KnowledgeBase
+
+    # Initialize KnowledgeBase (indexes bank_kb.json using BGE-M3 to ChromaDB)
+    app.state.log.info("Bilgi bankası ve BGE-M3 embedding modeli başlatılıyor...")
+    kb = KnowledgeBase(logger=app.state.log)
+    retriever = kb.get_retriever()
+
+    agent = LangChainBankAgent(
+        account_service=account_service,
+        model_name=Config.LLM_MODEL_NAME,
+        logger=app.state.log,
+        max_tokens=Config.LLM_MAX_TOKENS,
+        retriever=retriever,
+    )
+
+    audio_processor = AsyncAudioProcessor(
+        stt_engine=stt_engine,
+        agent=agent,
+        tts_engine=tts_engine,
+        logger=app.state.log,
+    )
+
+    # Save to app.state for external routers to access
+    app.state.stt_engine = stt_engine
+    app.state.tts_engine = tts_engine
+    app.state.audio_processor = audio_processor
+    app.state.knowledge_base = kb
+
+    app.state.log.info("Tüm servisler başarıyla başlatıldı.")
 
     yield
 
     # Shutdown
     app.state.log.info("👋 Local Bank AI Agent kapatılıyor...")
-    session_manager.close()
+
+    # Terminate Ollama process if running
+    app.state.log.info("Ollama servisi sonlandırılıyor...")
+    try:
+        import platform
+        if platform.system() == "Windows":
+            subprocess.run(["taskkill", "/F", "/IM", "ollama.exe"], capture_output=True)
+            subprocess.run(["taskkill", "/F", "/IM", "ollama_llama_server.exe"], capture_output=True)
+        else:
+            subprocess.run(["pkill", "-f", "ollama"], capture_output=True)
+        app.state.log.info("Ollama servisi başarıyla sonlandırıldı.")
+    except Exception as oe:
+        app.state.log.error(f"Ollama sonlandırılırken hata oluştu: {oe}")
+
+    # Terminate Coqui background server if running
+    coqui_process = getattr(app.state, "coqui_process", None)
+    if coqui_process:
+        app.state.log.info("Coqui yerel servisi kapatılıyor...")
+        try:
+            coqui_process.terminate()
+            try:
+                coqui_process.wait(timeout=5)
+                app.state.log.info("Coqui yerel servisi kapatıldı.")
+            except subprocess.TimeoutExpired:
+                app.state.log.warning("Coqui servisi zamanında kapanmadı, sonlandırılıyor (kill)...")
+                coqui_process.kill()
+                coqui_process.wait()
+                app.state.log.info("Coqui yerel servisi zorla kapatıldı.")
+        except Exception as e:
+            app.state.log.error(f"Coqui servisi kapatılırken hata oluştu: {e}")
+
+    if session_manager:
+        await session_manager.close()
     agent_cache.clear()
 
 
@@ -131,10 +266,12 @@ app.add_middleware(AuthenticationMiddleware)
 
 # Prometheus metrics (after middleware, before routes)
 from core.metrics import setup_prometheus_metrics
+
 setup_prometheus_metrics(app)
 
 # Include versioned API routes
 from routes import api_v1_router
+
 app.include_router(api_v1_router)
 
 # Templates and static files
@@ -148,45 +285,6 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # Logger
 log = get_correlated_logger()
 app.state.log = log  # Make available to lifespan
-
-# ---------------------------------------------------------------------------
-# Service initialization
-# ---------------------------------------------------------------------------
-log.info("Servisler başlatılıyor...")
-
-# ---------------------------------------------------------------------------
-# Service selection: mock (dev) vs real (production) via USE_MOCK_SERVICES flag
-# ---------------------------------------------------------------------------
-_use_mock = getattr(Config, "USE_MOCK_SERVICES", True)
-if _use_mock:
-    log.warning("USE_MOCK_SERVICES=true — Mock servisler aktif. Üretim ortamında false yapın.")
-    account_service = MockAccountService()
-    auth_service = MockAuthService()
-else:
-    # Replace with real service implementations for production
-    log.info("USE_MOCK_SERVICES=false — Gerçek bankacılık servisleri kullanılıyor.")
-    account_service = MockAccountService()   # TODO: swap with RealAccountService()
-    auth_service = MockAuthService()         # TODO: swap with RealAuthService()
-
-# Persistent session manager (SQLite-backed, survives restarts)
-session_manager = SQLiteSessionManager(
-    ttl_seconds=getattr(Config, "SESSION_TTL_SECONDS", 3600),
-    max_sessions=getattr(Config, "MAX_SESSIONS", 10000),
-)
-
-# TTS: Use engine router (Google Cloud -> Piper -> Coqui XTTS)
-tts_engine = TTSEngineRouter(logger=log)
-
-# STT
-log.info("Whisper modeli yükleniyor...")
-stt_engine = FasterWhisperSTTEngine(
-    logger=log,
-    model_size=Config.STT_MODEL_SIZE,
-    device=Config.STT_DEVICE,
-    compute_type=Config.STT_COMPUTE_TYPE,
-)
-
-log.info("Tüm servisler başarıyla başlatıldı.")
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +524,7 @@ async def health_check():
 
     # Session manager stats
     try:
-        health["components"]["sessions"] = session_manager.get_stats()
+        health["components"]["sessions"] = await session_manager.get_stats()
     except Exception as e:
         health["components"]["sessions"] = {"status": "error", "error": str(e)}
 
@@ -443,7 +541,7 @@ async def health_check():
 async def session_stats():
     """Get session manager statistics."""
     try:
-        return session_manager.get_stats()
+        return await session_manager.get_stats()
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -508,9 +606,9 @@ async def authenticate_customer(
     """
     try:
         # Validate session exists
-        session = session_manager.get_session(session_id)
+        session = await session_manager.get_session(session_id)
         if not session:
-            session = session_manager.create_session(session_id)
+            session = await session_manager.create_session(session_id)
 
         # Authenticate
         is_valid = auth_service.verify_customer(customer_id)
@@ -521,7 +619,7 @@ async def authenticate_customer(
             )
 
         # Bind to session
-        session_manager.authenticate_session(session_id, customer_id)
+        await session_manager.authenticate_session(session_id, customer_id)
 
         # Get customer info
         customer_info = auth_service.get_customer_info(customer_id)
@@ -706,9 +804,13 @@ def _process_audio_sync(
             customer_id,
         )
 
-        # 4. Text-to-Speech (with engine selection)
-        output_file = tts_engine.generate_audio(
-            text=ai_response_text, engine_name=tts_engine_name
+        # 4. Text-to-Speech (with engine selection and fallback)
+        from core.error_handler import execute_with_fallback
+        output_file = execute_with_fallback(
+            primary_fn=lambda: tts_engine.generate_audio(text=ai_response_text, engine_name=tts_engine_name),
+            fallback_fn=lambda: tts_engine.generate_audio(text=ai_response_text, engine_name="google"),
+            logger=log,
+            context="web_server_tts"
         )
 
         if not output_file or not os.path.exists(output_file):
@@ -731,8 +833,17 @@ def _process_audio_sync(
         }
 
     except Exception as e:
-        log.error(f"Sync Worker Hatası: {e}")
-        return {"status": "error", "message": str(e)}
+        error_res = handle_exception(
+            ERR_INTERNAL_SERVER_ERROR,
+            e,
+            logger=log,
+            context="_process_audio_sync"
+        )
+        return {
+            "status": "error",
+            "message": "Bir hata oluştu. Lütfen daha sonra tekrar deneyin.",
+            "error": error_res.get("error")
+        }
     finally:
         # Cleanup temp files
         try:
@@ -777,14 +888,14 @@ async def process_audio(
         session_id = "default_session"
 
     # Ensure session exists
-    session = session_manager.get_session(session_id)
+    session = await session_manager.get_session(session_id)
     if not session:
-        session = session_manager.create_session(session_id)
+        session = await session_manager.create_session(session_id)
 
     # If customer_id provided, try to authenticate
     if customer_id:
         try:
-            session_manager.authenticate_session(session_id, customer_id)
+            await session_manager.authenticate_session(session_id, customer_id)
         except (SessionError, AuthenticationError) as e:
             log.warning(f"Müşteri kimlik doğrulama başarısız: {e}")
             customer_id = None  # Proceed without auth

@@ -46,7 +46,7 @@ class MockAuthService(IAuthService):
             "last_name": "Yılmaz",
             "phone_number": "5551234567",
             # Simulated credentials (in production, these would be hashed)
-            "password_hash": hashlib.sha256("123456".encode()).hexdigest(),
+            "password_hash": hashlib.sha256(b"123456").hexdigest(),
             "otp_code": "111111",  # Simulated SMS OTP
         },
         "20000000114": {
@@ -55,7 +55,7 @@ class MockAuthService(IAuthService):
             "first_name": "Fatma",
             "last_name": "Demir",
             "phone_number": "5559876543",
-            "password_hash": hashlib.sha256("654321".encode()).hexdigest(),
+            "password_hash": hashlib.sha256(b"654321").hexdigest(),
             "otp_code": "222222",  # Simulated SMS OTP
         },
     }

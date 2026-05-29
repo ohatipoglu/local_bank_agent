@@ -151,3 +151,48 @@ class IAccountService(ABC):
             Dictionary with status, transaction_id, message
         """
         pass
+
+
+class ISTTEngine(ABC):
+    """
+    Speech-to-Text engine interface.
+    """
+
+    @abstractmethod
+    def listen_and_transcribe(
+        self,
+        timeout: int = 10,
+        phrase_time_limit: int = 15,
+        initial_prompt: str | None = None,
+    ) -> str:
+        """
+        Listen to microphone and transcribe speech to text.
+        """
+        pass
+
+    @abstractmethod
+    def transcribe_file(
+        self,
+        file_path: str,
+        initial_prompt: str | None = None,
+    ) -> str:
+        """
+        Transcribe an audio file to text.
+        """
+        pass
+
+
+class ITTSEngine(ABC):
+    """
+    Text-to-Speech engine interface.
+    """
+
+    @abstractmethod
+    def generate_audio(self, text: str) -> str | None:
+        """
+        Generate audio file from text.
+
+        Returns:
+            Path to generated WAV file, or None on failure
+        """
+        pass

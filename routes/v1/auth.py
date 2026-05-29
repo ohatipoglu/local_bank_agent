@@ -2,11 +2,10 @@
 Authentication endpoints v1.
 """
 
-from fastapi import APIRouter, Form, HTTPException
+from fastapi import APIRouter, Form
 
 from core.error_handler import (
     ERR_INTERNAL_SERVER_ERROR,
-    ERR_INVALID_TC,
     handle_exception,
 )
 from core.logger import get_correlated_logger
@@ -93,7 +92,7 @@ async def verify_customer_auth(
     try:
         # Sanitize input
         customer_id = sanitize_input(customer_id, max_length=11)
-        
+
         # Validate customer ID exists
         is_valid = auth_service.verify_customer(customer_id)
         if not is_valid:

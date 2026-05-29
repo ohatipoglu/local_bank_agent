@@ -63,7 +63,7 @@ class TestListAccounts:
 
         result = accounts_tool.invoke({"customer_id": "12345678901"})
 
-        assert "Hesaplarınız" in result or "hesap" in result.lower()
+        assert "Hesaplarınız" in result or any(w in result.lower() for w in ["hesap", "hesab"])
         assert isinstance(result, str)
 
     def test_list_accounts_no_service(self):

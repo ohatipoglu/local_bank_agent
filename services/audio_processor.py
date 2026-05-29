@@ -6,9 +6,16 @@ Handles STT -> Agent -> TTS pipeline asynchronously with timeout support.
 import asyncio
 import base64
 import os
-from typing import Optional
 
-from core.config import Config
+from core.error_handler import (
+    ERR_ALL_TTS_FAILED,
+    ERR_INTERNAL_SERVER_ERROR,
+    ERR_TRANSCRIPTION_FAILED,
+    ErrorCategory,
+    ErrorCode,
+    ProcessingError,
+    handle_exception,
+)
 from core.logger import get_correlated_logger
 
 
@@ -50,10 +57,10 @@ class AsyncAudioProcessor:
         self,
         audio_path: str,
         session_id: str,
-        customer_id: Optional[str] = None,
+        customer_id: str | None = None,
         strictness_level: int = 3,
-        model_name: Optional[str] = None,
-        tts_engine_name: Optional[str] = None,
+        model_name: str | None = None,
+        tts_engine_name: str | None = None,
     ) -> dict:
         """
         Process audio through full STT -> Agent -> TTS pipeline asynchronously.
@@ -84,32 +91,27 @@ class AsyncAudioProcessor:
             )
             return result
 
-        except asyncio.TimeoutError:
-            self.logger.error(
-                f"Audio processing timed out after {self.timeout_seconds}s"
+        except asyncio.TimeoutError as e:
+            timeout_err = ProcessingError(
+                category=ErrorCategory.TIMEOUT_ERROR,
+                code=ErrorCode.OVERALL_TIMEOUT,
+                message_tr=f"İşlem zaman aşımına uğradı ({self.timeout_seconds}s). Lütfen tekrar deneyin.",
+                message_en=f"Audio processing timed out after {self.timeout_seconds}s",
+                retryable=True,
             )
-            return {
-                "status": "error",
-                "message": f"İşlem zaman aşımına uğradı ({self.timeout_seconds}s). Lütfen tekrar deneyin.",
-                "error_code": "TIMEOUT",
-            }
+            return handle_exception(timeout_err, e, logger=self.logger, context="AsyncAudioProcessor.process")
 
         except Exception as e:
-            self.logger.error(f"Audio processing error: {e}")
-            return {
-                "status": "error",
-                "message": f"Ses işleme hatası: {str(e)}",
-                "error_code": "PROCESSING_ERROR",
-            }
+            return handle_exception(ERR_INTERNAL_SERVER_ERROR, e, logger=self.logger, context="AsyncAudioProcessor.process")
 
     async def _process_pipeline(
         self,
         audio_path: str,
         session_id: str,
-        customer_id: Optional[str],
+        customer_id: str | None,
         strictness_level: int,
-        model_name: Optional[str],
-        tts_engine_name: Optional[str],
+        model_name: str | None,
+        tts_engine_name: str | None,
     ) -> dict:
         """
         Execute STT -> Agent -> TTS pipeline.
@@ -138,7 +140,7 @@ class AsyncAudioProcessor:
             self.logger.info(f"STT Result: {user_text}")
 
             # Stage 2: Agent Processing (run in thread pool)
-            self.logger.debug(f"Stage 2: Agent Processing")
+            self.logger.debug("Stage 2: Agent Processing")
             ai_response_text = await asyncio.to_thread(
                 self.agent.handle_turn,
                 user_text,
@@ -149,12 +151,15 @@ class AsyncAudioProcessor:
 
             self.logger.info(f"Agent Response: {ai_response_text}")
 
-            # Stage 3: Text-to-Speech (run in thread pool)
-            self.logger.debug(f"Stage 3: TTS Generation")
+            # Stage 3: Text-to-Speech (run in thread pool with fallback)
+            self.logger.debug("Stage 3: TTS Generation")
+            from core.error_handler import execute_with_fallback
             output_file = await asyncio.to_thread(
-                self.tts_engine.generate_audio,
-                text=ai_response_text,
-                engine_name=tts_engine_name,
+                execute_with_fallback,
+                primary_fn=lambda: self.tts_engine.generate_audio(text=ai_response_text, engine_name=tts_engine_name),
+                fallback_fn=lambda: self.tts_engine.generate_audio(text=ai_response_text, engine_name="google"),
+                logger=self.logger,
+                context="audio_processor_tts"
             )
 
             if not output_file or not os.path.exists(output_file):
@@ -167,7 +172,7 @@ class AsyncAudioProcessor:
                 }
 
             # Stage 4: Encode audio to base64
-            self.logger.debug(f"Stage 4: Encoding audio")
+            self.logger.debug("Stage 4: Encoding audio")
             with open(output_file, "rb") as audio_file:
                 encoded_audio = base64.b64encode(audio_file.read()).decode("utf-8")
 
@@ -190,7 +195,7 @@ class AsyncAudioProcessor:
             await self._cleanup_files(temp_audio_path, output_file)
 
     async def _cleanup_files(
-        self, temp_audio_path: Optional[str], output_file: Optional[str]
+        self, temp_audio_path: str | None, output_file: str | None
     ):
         """Clean up temporary audio files asynchronously."""
 
@@ -231,16 +236,17 @@ class AsyncAudioProcessor:
             }
 
         except Exception as e:
-            self.logger.error(f"Transcription error: {e}")
-            return {
-                "status": "error",
-                "message": f"Transkripsiyon hatası: {str(e)}",
-            }
+            return handle_exception(
+                ERR_TRANSCRIPTION_FAILED,
+                e,
+                logger=self.logger,
+                context="AsyncAudioProcessor.transcribe_only",
+            )
 
     async def generate_speech_only(
         self,
         text: str,
-        tts_engine_name: Optional[str] = None,
+        tts_engine_name: str | None = None,
     ) -> dict:
         """
         Generate speech from text without STT or agent processing.
@@ -253,10 +259,13 @@ class AsyncAudioProcessor:
             Dictionary with base64-encoded audio
         """
         try:
+            from core.error_handler import execute_with_fallback
             output_file = await asyncio.to_thread(
-                self.tts_engine.generate_audio,
-                text=text,
-                engine_name=tts_engine_name,
+                execute_with_fallback,
+                primary_fn=lambda: self.tts_engine.generate_audio(text=text, engine_name=tts_engine_name),
+                fallback_fn=lambda: self.tts_engine.generate_audio(text=text, engine_name="google"),
+                logger=self.logger,
+                context="audio_processor_speech_only"
             )
 
             if not output_file or not os.path.exists(output_file):
@@ -277,8 +286,9 @@ class AsyncAudioProcessor:
             }
 
         except Exception as e:
-            self.logger.error(f"TTS error: {e}")
-            return {
-                "status": "error",
-                "message": f"TTS hatası: {str(e)}",
-            }
+            return handle_exception(
+                ERR_ALL_TTS_FAILED,
+                e,
+                logger=self.logger,
+                context="AsyncAudioProcessor.generate_speech_only",
+            )

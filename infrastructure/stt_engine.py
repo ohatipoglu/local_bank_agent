@@ -17,9 +17,10 @@ from core.exceptions import (
     STTModelLoadError,
     STTNoSpeechDetectedError,
 )
+from domain.interfaces import ISTTEngine
 
 
-class FasterWhisperSTTEngine:
+class FasterWhisperSTTEngine(ISTTEngine):
     """
     Speech-to-Text engine using Faster-Whisper with Turkish language optimization.
 
@@ -37,7 +38,7 @@ class FasterWhisperSTTEngine:
     # Default banking context prompt for better recognition
     BANKING_PROMPT = (
         "Bu bir bankacılık görüşmesidir. "
-        "Bakiye, havale, EFT, kredi kartı, valör, faiz işlemleri konuşulmaktadır."
+        "KMH, Kredili Mevduat Hesabı, EFT, FAST, SWIFT, BSMV, KKDF, IBAN, VİOP, KGF, SPK, BIST 100, TEB terimleri geçmektedir."
     )
 
     def __init__(

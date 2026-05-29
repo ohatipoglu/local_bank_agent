@@ -18,6 +18,7 @@ from google.api_core.exceptions import GoogleAPIError, RetryError, ServiceUnavai
 from google.cloud import texttospeech
 
 from core.config import Config
+from domain.interfaces import ITTSEngine
 
 
 def play_audio_async(file_path: str, logger):
@@ -52,7 +53,7 @@ def play_audio_async(file_path: str, logger):
     thread.start()
 
 
-class TTSEngineBase:
+class TTSEngineBase(ITTSEngine):
     """
     Base class for TTS engines with text preprocessing.
 
@@ -201,6 +202,114 @@ class PiperTTSEngine(TTSEngineBase):
             play_audio_async(output_file, self.logger)
 
 
+def _get_conda_executable(logger) -> str:
+    """
+    Dynamically resolve the absolute path to the conda executable.
+    Tries CONDA_EXE, then traverses relative to sys.executable (activated environment),
+    and falls back to typical path mappings.
+    """
+    conda_exe = os.getenv("CONDA_EXE")
+    if conda_exe and os.path.exists(conda_exe):
+        return conda_exe
+
+    import sys
+    python_exe = sys.executable
+    python_dir = os.path.dirname(python_exe)
+
+    # Try traversing up from envs folder
+    if "envs" in python_dir.lower():
+        base_dir = python_dir
+        while os.path.basename(base_dir).lower() != "envs" and base_dir:
+            parent = os.path.dirname(base_dir)
+            if parent == base_dir:
+                break
+            base_dir = parent
+
+        if base_dir and os.path.basename(base_dir).lower() == "envs":
+            base_dir = os.path.dirname(base_dir)
+            for rel in [
+                os.path.join(base_dir, "Scripts", "conda.exe"),
+                os.path.join(base_dir, "condabin", "conda.bat"),
+            ]:
+                if os.path.exists(rel):
+                    return rel
+
+    # Check common system-wide conda/miniconda paths
+    common_bases = [
+        "C:\\ProgramData\\anaconda3",
+        "C:\\ProgramData\\miniconda3",
+        os.path.join(os.environ.get("USERPROFILE", ""), "anaconda3"),
+        os.path.join(os.environ.get("USERPROFILE", ""), "miniconda3"),
+    ]
+    for base in common_bases:
+        for rel in [
+            os.path.join(base, "Scripts", "conda.exe"),
+            os.path.join(base, "condabin", "conda.bat"),
+        ]:
+            if os.path.exists(rel):
+                return rel
+
+    return "conda"
+
+
+def _get_coqui_python_executable(logger) -> str | None:
+    """
+    Resolve the absolute path to the python executable inside the coqui_env conda environment.
+    Avoids conda run wrapper overhead and nesting issues.
+    """
+    import sys
+    # Try traversing relative to sys.executable (main environment python)
+    python_exe = sys.executable
+    python_dir = os.path.dirname(python_exe)
+
+    if "envs" in python_dir.lower():
+        envs_dir = python_dir
+        while os.path.basename(envs_dir).lower() != "envs" and envs_dir:
+            parent = os.path.dirname(envs_dir)
+            if parent == envs_dir:
+                break
+            envs_dir = parent
+
+        if envs_dir and os.path.basename(envs_dir).lower() == "envs":
+            coqui_python = os.path.join(envs_dir, "coqui_env", "python.exe")
+            if os.path.exists(coqui_python):
+                return coqui_python
+
+    # Check common system-wide paths
+    common_bases = [
+        "C:\\ProgramData\\anaconda3",
+        "C:\\ProgramData\\miniconda3",
+        os.path.join(os.environ.get("USERPROFILE", ""), "anaconda3"),
+        os.path.join(os.environ.get("USERPROFILE", ""), "miniconda3"),
+    ]
+    for base in common_bases:
+        coqui_python = os.path.join(base, "envs", "coqui_env", "python.exe")
+        if os.path.exists(coqui_python):
+            return coqui_python
+
+    # Try to check via conda env path directly if available
+    try:
+        conda_path = _get_conda_executable(logger)
+        use_shell = conda_path.endswith(".bat") or conda_path.endswith(".cmd") or os.name == "nt"
+        cmd_args = [conda_path, "env", "list"] if not use_shell else f'"{conda_path}" env list'
+        result = subprocess.run(
+            cmd_args, capture_output=True, text=True, timeout=5, shell=use_shell
+        )
+        for line in result.stdout.splitlines():
+            if "coqui_env" in line:
+                parts = line.split()
+                # Find the path part (usually starts with C:\ or /)
+                for part in parts:
+                    if os.path.isdir(part):
+                        py_path = os.path.join(part, "python.exe")
+                        if os.path.exists(py_path):
+                            return py_path
+    except Exception as e:
+        logger.warning(f"Could not search conda envs: {e}")
+
+    return None
+
+
 class CoquiTTSEngine(TTSEngineBase):
     """
     Local TTS engine using Coqui XTTS v2 via direct API.
@@ -244,28 +353,31 @@ class CoquiTTSEngine(TTSEngineBase):
             self.speaker_wav = Config.COQUI_VOICE_REF_AUDIO
             self.logger.info(f"Using reference voice: {self.speaker_wav}")
 
-        # Check if coqui_env exists and server script is available
+        # Check if coqui_env python exists and server script is available
         try:
-            # Check conda env exists
-            result = subprocess.run(
-                ["conda", "env", "list"], capture_output=True, text=True, timeout=10
-            )
-            if self.conda_env in result.stdout:
-                if os.path.exists(self.server_script):
+            coqui_python = _get_coqui_python_executable(self.logger)
+            if coqui_python and os.path.exists(self.server_script):
+                self.coqui_available = True
+                self.logger.info(f"Coqui XTTS: Ready (Python: {coqui_python})")
+            else:
+                # Fallback to checking conda env list
+                conda_path = _get_conda_executable(self.logger)
+                use_shell = conda_path.endswith(".bat") or conda_path.endswith(".cmd") or os.name == "nt"
+                cmd_args = [conda_path, "env", "list"] if not use_shell else f'"{conda_path}" env list'
+                result = subprocess.run(
+                    cmd_args, capture_output=True, text=True, timeout=10, shell=use_shell
+                )
+                if self.conda_env in result.stdout and os.path.exists(self.server_script):
                     self.coqui_available = True
                     self.logger.info(f"Coqui XTTS: Ready (env: {self.conda_env})")
                 else:
-                    self.logger.error(
-                        f"Coqui server script not found: {self.server_script}"
-                    )
-            else:
-                self.logger.error(f"Conda environment '{self.conda_env}' not found.")
+                    self.logger.error(f"Conda environment '{self.conda_env}' or server script not found.")
         except Exception as e:
             self.logger.error(f"Coqui XTTS initialization error: {e}")
 
     def generate_audio(self, text: str) -> str | None:
         """
-        Generate audio using Coqui XTTS v2 via subprocess to coqui_env.
+        Generate audio using Coqui XTTS v2 via persistent Flask HTTP server.
 
         Args:
             text: Input text
@@ -278,79 +390,56 @@ class CoquiTTSEngine(TTSEngineBase):
             return None
 
         start_time = time.time()
-        self.logger.debug(f"Coqui XTTS Original Text: {text}")
+        self.logger.debug(f"Coqui XTTS (HTTP) Original Text: {text}")
 
         normalized_text = self._preprocess_text(text)
-        
+
         req_id = uuid.uuid4().hex[:8]
         output_file = os.path.join(self.project_root, f"coqui_output_{req_id}.wav")
-        text_file = os.path.join(self.project_root, f"coqui_input_{req_id}.txt")
-        
-        # Write text to a temporary file to avoid all shell encoding/quoting issues
+
+        server_url = f"http://{Config.COQUI_SERVER_HOST}:{Config.COQUI_SERVER_PORT}"
+
+        # 1. Check if server is running and healthy
+        import httpx
         try:
-            with open(text_file, "w", encoding="utf-8") as f:
-                f.write(normalized_text)
-        except Exception as e:
-            self.logger.error(f"Failed to create temp text file: {e}")
+            health_res = httpx.get(f"{server_url}/health", timeout=2.0)
+            if health_res.status_code != 200:
+                self.logger.warning(f"Coqui server health check returned status {health_res.status_code}. Falling back.")
+                return None
+        except httpx.RequestError as e:
+            self.logger.warning(f"Coqui server is not running or still loading: {e}. Falling back.")
             return None
 
-        # Build command with "FILE:" prefix to avoid argparse issues in conda run
-        cmd = f'conda run -n {self.conda_env} python "{self.server_script}" "FILE:{text_file}" "{output_file}"'
-        
-        if self.speaker_wav:
-            cmd += f' "{self.speaker_wav}"'
+        # 2. Post synthesis request
+        payload = {
+            "text": normalized_text,
+            "speaker_wav": self.speaker_wav
+        }
 
         try:
-            self.logger.debug(f"Coqui command: {cmd[:100]}...")
+            self.logger.debug(f"Sending POST to Coqui server: {server_url}/synthesize")
+            response = httpx.post(f"{server_url}/synthesize", json=payload, timeout=120.0)
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,  # 2 minutes max for synthesis
-                cwd=self.project_root,
-                shell=True
-            )
+            if response.status_code == 200 and response.content:
+                with open(output_file, "wb") as f:
+                    f.write(response.content)
 
-            # Log stderr (Coqui prints status there)
-            if result.stderr:
-                try:
-                    stderr_text = result.stderr.decode("utf-8", errors="replace")
-                except Exception:
-                    stderr_text = str(result.stderr)
-                    
-                for line in stderr_text.strip().split("\n"):
-                    if line.strip():
-                        self.logger.debug(f"Coqui stderr: {line.strip()}")
-
-            if result.returncode == 0 and os.path.exists(output_file):
                 elapsed = time.time() - start_time
                 file_size = os.path.getsize(output_file)
                 self.logger.info(
-                    f"Coqui XTTS synthesis complete. Time: {elapsed:.2f}s, "
+                    f"Coqui XTTS synthesis complete (HTTP). Time: {elapsed:.2f}s, "
                     f"Size: {file_size/1024:.1f} KB"
                 )
                 return output_file
             else:
                 self.logger.error(
-                    f"Coqui XTTS failed (exit code {result.returncode}). "
-                    f"Check coqui_tts_server.py and {self.conda_env}."
+                    f"Coqui HTTP synthesis failed (status code {response.status_code}): {response.text}"
                 )
                 return None
 
-        except subprocess.TimeoutExpired:
-            self.logger.error("Coqui XTTS: Synthesis timed out (120s limit)")
-            return None
         except Exception as e:
-            self.logger.error(f"Coqui XTTS Generation Error: {e}")
+            self.logger.error(f"Coqui XTTS HTTP Generation Error: {e}")
             return None
-        finally:
-            # Clean up the temporary text file
-            try:
-                if os.path.exists(text_file):
-                    os.remove(text_file)
-            except OSError:
-                pass
 
     def speak(self, text: str):
         """Generate and play audio asynchronously."""
@@ -624,12 +713,9 @@ class TTSEngineRouter:
             logger.error(f"Google Cloud TTS başlatma hatası: {e}")
 
         # 2. Piper TTS
-        use_piper = (
-            enable_piper
-            if enable_piper is not None
-            else Config.TTS_ENABLE_PIPER_FALLBACK
-        )
-        if use_piper:
+        # Always attempt initialization if not explicitly disabled via parameter,
+        # so it is available as a first-class engine.
+        if enable_piper is not False:
             try:
                 if os.path.exists(Config.PIPER_MODEL_PATH):
                     piper_engine = PiperTTSEngine(Config.PIPER_MODEL_PATH, logger)
@@ -646,12 +732,9 @@ class TTSEngineRouter:
                 logger.error(f"Piper TTS başlatma hatası: {e}")
 
         # 3. Coqui XTTS v2
-        use_coqui = (
-            enable_coqui
-            if enable_coqui is not None
-            else Config.TTS_ENABLE_COQUI_FALLBACK
-        )
-        if use_coqui:
+        # Always attempt initialization if not explicitly disabled via parameter,
+        # so it is available as a first-class engine.
+        if enable_coqui is not False:
             try:
                 coqui_engine = CoquiTTSEngine(logger)
                 if coqui_engine.coqui_available:
@@ -665,10 +748,9 @@ class TTSEngineRouter:
                 logger.error(f"Coqui XTTS başlatma hatası: {e}")
 
         # 4. Edge TTS
-        use_edge = (
-            enable_edge if enable_edge is not None else Config.TTS_ENABLE_EDGE_FALLBACK
-        )
-        if use_edge:
+        # Always attempt initialization if not explicitly disabled via parameter,
+        # so it is available as a first-class engine.
+        if enable_edge is not False:
             try:
                 edge_engine = EdgeTTSEngine(logger)
                 if edge_engine.edge_available:
@@ -693,7 +775,7 @@ class TTSEngineRouter:
     def get_available_engines(self) -> list[dict]:
         """
         Return list of available engines with metadata for frontend display.
-        Only returns cloud/online engines to simplify the UI, hiding local fallback engines.
+        Includes both cloud and local engines as selectable options.
 
         Returns:
             List of dicts with engine info: name, display_name, type, quality, offline
@@ -709,7 +791,7 @@ class TTSEngineRouter:
             },
             self.ENGINE_PIPER: {
                 "name": self.ENGINE_PIPER,
-                "display_name": "Piper",
+                "display_name": "Piper (Yerel Hafif)",
                 "description": "Çevrimdışı, hafif",
                 "quality": "Orta",
                 "offline": True,
@@ -717,7 +799,7 @@ class TTSEngineRouter:
             },
             self.ENGINE_COQUI: {
                 "name": self.ENGINE_COQUI,
-                "display_name": "Coqui XTTS",
+                "display_name": "Coqui (Yerel)",
                 "description": "Yerel, yüksek kalite, GPU destekli",
                 "quality": "Çok Yüksek",
                 "offline": True,
@@ -735,10 +817,6 @@ class TTSEngineRouter:
 
         available = []
         for eng_name in self.engines:
-            # Hide local TTS engines (Piper, Coqui) from the frontend UI
-            if eng_name in [self.ENGINE_PIPER, self.ENGINE_COQUI]:
-                continue
-
             info = engine_info.get(eng_name, {}).copy()
             info["available"] = True
             available.append(info)
@@ -788,11 +866,23 @@ class TTSEngineRouter:
                 self.logger.info(f"TTS başarılı: {engine_name}")
                 return output_file
             else:
+                if engine_name in [self.ENGINE_COQUI, self.ENGINE_PIPER]:
+                    self.logger.warning(
+                        f"Kullanıcı tarafından seçilen '{engine_name}' motoru başarısız oldu. "
+                        "Doğrudan istek olduğu için fallback mekanizması atlanıyor."
+                    )
+                    return None
                 self.logger.warning(f"{engine_name} başarısız, fallback deneniyor...")
                 # Try fallback to other engines
                 return self._try_fallback(text, skip_engine=engine_name)
         except Exception as e:
             self.logger.error(f"{engine_name} hatası: {e}")
+            if engine_name in [self.ENGINE_COQUI, self.ENGINE_PIPER]:
+                self.logger.warning(
+                    f"Kullanıcı tarafından seçilen '{engine_name}' motorunda hata oluştu. "
+                    "Doğrudan istek olduğu için fallback mekanizması atlanıyor."
+                )
+                return None
             return self._try_fallback(text, skip_engine=engine_name)
 
     def _try_fallback(self, text: str, skip_engine: str) -> str | None:
@@ -800,6 +890,15 @@ class TTSEngineRouter:
         for name, engine in self.engines.items():
             if name == skip_engine:
                 continue
+
+            # Check config flags for fallback engines
+            if name == self.ENGINE_COQUI and not Config.TTS_ENABLE_COQUI_FALLBACK:
+                continue
+            if name == self.ENGINE_PIPER and not Config.TTS_ENABLE_PIPER_FALLBACK:
+                continue
+            if name == self.ENGINE_EDGE and not Config.TTS_ENABLE_EDGE_FALLBACK:
+                continue
+
             try:
                 self.logger.debug(f"TTS fallback deneniyor: {name}")
                 output_file = engine.generate_audio(text)

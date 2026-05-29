@@ -20,10 +20,9 @@ Usage:
 """
 
 import random
-import time
 from io import BytesIO
-from locust import HttpUser, task, between, events
-from locust.runners import MasterRunner, WorkerRunner
+
+from locust import HttpUser, between, events, task
 
 
 class AudioProcessingUser(HttpUser):
@@ -106,8 +105,8 @@ class AudioProcessingUser(HttpUser):
 
         This creates a very short silent WAV file.
         """
-        import wave
         import struct
+        import wave
 
         # Create WAV in memory
         buffer = BytesIO()

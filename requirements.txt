@@ -21,6 +21,11 @@ faster-whisper>=1.0.3
 speechrecognition>=3.10.4
 google-cloud-texttospeech>=2.21.0
 edge-tts>=6.1.0
+torch>=2.0.0
+sentence-transformers>=3.0.0
+chromadb>=0.5.0
+langchain-chroma>=0.1.4
+langchain-huggingface>=0.0.3
 
 # LangChain & Agent Framework
 langchain>=0.3.0

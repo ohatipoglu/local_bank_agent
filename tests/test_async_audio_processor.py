@@ -4,10 +4,10 @@ Tests for async audio processing service.
 
 import asyncio
 import os
+import struct
 import tempfile
 import time
 import wave
-import struct
 from io import BytesIO
 
 import pytest
@@ -136,7 +136,8 @@ async def test_process_timeout(audio_processor, temp_audio_file):
     )
 
     assert result["status"] == "error"
-    assert "TIMEOUT" in result.get("error_code", "")
+    assert "error" in result
+    assert "timeout" in result["error"]["code"]
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,6 @@
 """
 Tests for prompt generation module.
 """
-import pytest
 from application.prompts import get_dynamic_prompt, load_prompts_from_yaml
 
 

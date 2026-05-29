@@ -2,21 +2,21 @@
 Tests for core exceptions module.
 """
 import pytest
+
 from core.exceptions import (
-    LocalBankError,
-    STTError,
-    STTNoSpeechDetectedError,
-    STTModelLoadError,
-    TTSError,
-    TTSClientNotInitializedError,
     AgentError,
     AgentInitializationError,
     AgentTimeoutError,
+    AuthenticationError,
+    LocalBankError,
     ServiceError,
     ServiceUnavailableError,
-    AuthenticationError,
     SessionError,
-    ConfigurationError,
+    STTError,
+    STTModelLoadError,
+    STTNoSpeechDetectedError,
+    TTSClientNotInitializedError,
+    TTSError,
 )
 
 

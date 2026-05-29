@@ -49,10 +49,12 @@ class BankToolsRegistry:
     - get_transaction_history: Recent transaction list
     - list_accounts: All customer accounts
     - pay_credit_card: Pay credit card bill
+    - search_bank_knowledge_base: Search banking knowledge base (FAQ, limits, commissions)
     """
 
-    def __init__(self, account_service: IAccountService):
+    def __init__(self, account_service: IAccountService, retriever=None):
         self.account_service = account_service
+        self.retriever = retriever
         self.tools = self._initialize_tools()
 
     def get_tools(self) -> list[Callable]:
@@ -212,7 +214,7 @@ class BankToolsRegistry:
                 return f"Hesap listeleme hatası: {str(e)}"
 
         @tool
-        def pay_credit_card(amount: float = None) -> str:
+        def pay_credit_card(amount: float | None = None) -> str:
             """
             Kredi kartı borcu öder.
             Kullanıcı 'kredi kartı borcumu öde', 'kart borcunu yatır'
@@ -252,7 +254,7 @@ class BankToolsRegistry:
             except Exception as e:
                 return f"Kredi kartı ödeme hatası: {str(e)}"
 
-        return [
+        tools_list = [
             get_balance,
             get_credit_card_debt,
             execute_eft,
@@ -261,3 +263,32 @@ class BankToolsRegistry:
             list_accounts,
             pay_credit_card,
         ]
+
+        if self.retriever:
+            @tool
+            def search_bank_knowledge_base(query: str) -> str:
+                """
+                Banka kuralları, sıkça sorulan sorular (SSS), faiz oranları, işlem limitleri, komisyonlar,
+                bankacılık terimlerinin anlamları, kısaltmaların açılımları, resmi sözlük tanımları ve
+                banka mevzuatı hakkındaki soruları cevaplamak için bu aracı kullanın.
+
+                Args:
+                    query: Arama sorgusu (Türkçe kelimelerle arama yapmak için anahtar kelimeler)
+                """
+                if not self.retriever:
+                    return "Servis hatası: Bilgi bankasına ulaşılamıyor."
+                try:
+                    docs = self.retriever.invoke(query)
+                    if not docs:
+                        return "Bilgi bankasında bu konuyla ilgili herhangi bir bilgi bulunamadı."
+                    
+                    parts = []
+                    for i, doc in enumerate(docs):
+                        parts.append(f"[Bilgi {i+1}]: {doc.page_content}")
+                    return "\n\n".join(parts)
+                except Exception as e:
+                    return f"Bilgi bankası arama hatası: {str(e)}"
+
+            tools_list.append(search_bank_knowledge_base)
+
+        return tools_list

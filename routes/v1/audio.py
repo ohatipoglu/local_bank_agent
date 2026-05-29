@@ -4,76 +4,32 @@ Audio processing endpoints v1.
 
 import os
 import uuid
-from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from core.config import Config
 from core.error_handler import (
     ERR_INTERNAL_SERVER_ERROR,
+    ErrorCategory,
+    ErrorCode,
+    ProcessingError,
     create_error_response,
     handle_exception,
 )
 from core.logger import get_correlated_logger, set_correlation_id
 from core.security import sanitize_input, validate_audio_upload
-from domain.interfaces import IAccountService
-from infrastructure.stt_engine import FasterWhisperSTTEngine
-from infrastructure.tts_engine import TTSEngineRouter
-from services.audio_processor import AsyncAudioProcessor
 
 router = APIRouter()
 log = get_correlated_logger()
 
 
-# Global processor instance (initialized on first use)
-_audio_processor: Optional[AsyncAudioProcessor] = None
-_stt_engine: Optional[FasterWhisperSTTEngine] = None
-_tts_engine: Optional[TTSEngineRouter] = None
-_agent = None
 
-
-def _get_processor():
-    """Lazy initialization of audio processor."""
-    global _audio_processor, _stt_engine, _tts_engine, _agent
-
-    if _audio_processor is None:
-        # Initialize STT
-        _stt_engine = FasterWhisperSTTEngine(
-            logger=log,
-            model_size=Config.STT_MODEL_SIZE,
-            device=Config.STT_DEVICE,
-            compute_type=Config.STT_COMPUTE_TYPE,
-        )
-
-        # Initialize TTS
-        _tts_engine = TTSEngineRouter(logger=log)
-
-        # Initialize Agent
-        from application.langchain_agent import LangChainBankAgent
-        from infrastructure.mock_services import MockAccountService
-
-        account_service = MockAccountService()
-        _agent = LangChainBankAgent(
-            account_service=account_service,
-            model_name=Config.LLM_MODEL_NAME,
-            logger=log,
-            max_tokens=Config.LLM_MAX_TOKENS,
-        )
-
-        # Create processor
-        _audio_processor = AsyncAudioProcessor(
-            stt_engine=_stt_engine,
-            agent=_agent,
-            tts_engine=_tts_engine,
-            logger=log,
-        )
-
-    return _audio_processor
 
 
 @router.post("/process")
 async def process_audio(
+    request: Request,
     audio: UploadFile = File(...),
     strictness: int = Form(3),
     model_name: str = Form(None),
@@ -106,13 +62,13 @@ async def process_audio(
         return JSONResponse(
             status_code=400,
             content=create_error_response(
-                type("ProcessingError", (), {
-                    "category": "AUDIO_VALIDATION_ERROR",
-                    "code": "INVALID_AUDIO_FILE",
-                    "message_tr": error_msg,
-                    "message_en": error_msg,
-                    "retryable": False,
-                })()
+                ProcessingError(
+                    category=ErrorCategory.AUDIO_VALIDATION_ERROR,
+                    code=ErrorCode.INVALID_AUDIO_FILE,
+                    message_tr=error_msg,
+                    message_en=error_msg,
+                    retryable=False,
+                )
             ).get("error"),
         )
 
@@ -130,8 +86,8 @@ async def process_audio(
         with open(temp_audio_path, "wb") as f:
             f.write(content)
 
-        # Get processor
-        processor = _get_processor()
+        # Get processor from app state
+        processor = request.app.state.audio_processor
 
         # Process audio asynchronously
         result = await processor.process(
@@ -165,6 +121,7 @@ async def process_audio(
 
 @router.post("/transcribe")
 async def transcribe_audio(
+    request: Request,
     audio: UploadFile = File(...),
     language: str = Form("tr"),
 ):
@@ -202,8 +159,8 @@ async def transcribe_audio(
         with open(temp_audio_path, "wb") as f:
             f.write(content)
 
-        # Get processor
-        processor = _get_processor()
+        # Get processor from app state
+        processor = request.app.state.audio_processor
 
         # Transcribe only
         result = await processor.transcribe_only(
@@ -231,6 +188,7 @@ async def transcribe_audio(
 
 @router.post("/synthesize")
 async def synthesize_speech(
+    request: Request,
     text: str = Form(...),
     tts_engine: str = Form(None),
 ):
@@ -256,8 +214,8 @@ async def synthesize_speech(
         )
 
     try:
-        # Get processor
-        processor = _get_processor()
+        # Get processor from app state
+        processor = request.app.state.audio_processor
 
         # Synthesize only
         result = await processor.generate_speech_only(

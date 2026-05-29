@@ -2,6 +2,7 @@
 Tests for banking tools registry.
 """
 import pytest
+
 from application.tools_registry import BankToolsRegistry
 from infrastructure.mock_services import MockAccountService
 
@@ -63,3 +64,31 @@ class TestBankToolsRegistry:
         for tool in tools:
             assert tool.description is not None
             assert len(tool.description) > 20, f"Tool {tool.name} description too short"
+
+    def test_search_bank_knowledge_base_tool_registered_only_with_retriever(self):
+        """Test search_bank_knowledge_base is registered only if retriever is provided."""
+        from unittest.mock import MagicMock
+        service = MockAccountService()
+        
+        # Test 1: No retriever
+        registry_no_ret = BankToolsRegistry(service)
+        tools_no_ret = registry_no_ret.get_tools()
+        names_no_ret = [t.name for t in tools_no_ret]
+        assert "search_bank_knowledge_base" not in names_no_ret
+        
+        # Test 2: With retriever
+        mock_retriever = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.page_content = "Limitler: 1000 TL"
+        mock_retriever.invoke.return_value = [mock_doc]
+        
+        registry_with_ret = BankToolsRegistry(service, retriever=mock_retriever)
+        tools_with_ret = registry_with_ret.get_tools()
+        names_with_ret = [t.name for t in tools_with_ret]
+        assert "search_bank_knowledge_base" in names_with_ret
+        
+        # Test tool invocation
+        kb_tool = next(t for t in tools_with_ret if t.name == "search_bank_knowledge_base")
+        res = kb_tool.invoke({"query": "limitler"})
+        assert "[Bilgi 1]: Limitler: 1000 TL" in res
+

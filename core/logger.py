@@ -2,16 +2,15 @@
 Structured logging with correlation IDs and JSON formatting support.
 Provides both human-readable console output and machine-parseable JSON logs.
 """
-import sys
-import sqlite3
-import datetime
 import json
-import uuid
 import os
+import sqlite3
+import sys
 import threading
-from loguru import logger
+import uuid
 from contextvars import ContextVar
-from typing import Optional
+
+from loguru import logger
 
 # SQLite Log Database Path
 LOG_DB_PATH = os.path.join(
@@ -20,7 +19,7 @@ LOG_DB_PATH = os.path.join(
 )
 
 # Context variable for correlation ID (thread-safe async context)
-correlation_id: ContextVar[Optional[str]] = ContextVar('correlation_id', default=None)
+correlation_id: ContextVar[str | None] = ContextVar('correlation_id', default=None)
 
 
 def get_correlation_id() -> str:

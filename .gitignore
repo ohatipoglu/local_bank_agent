@@ -32,6 +32,7 @@ ENV/
 .env.backup
 *.json
 !package.json
+!data/*.json
 local-bank-tts-*.json
 service-account*.json
 coqui_tts_config.json
@@ -45,6 +46,10 @@ coqui_tts_config.json
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
 logs.db
 *.log
 application.log
@@ -132,3 +137,23 @@ conda-env.yml
 .cursor/
 .claude/
 .copilot/
+.continue/
+.ruff_cache/
+
+# ============================================
+# Backup & Dead Code folder
+# ============================================
+silinenler/
+
+# Çevre Değişkenleri ve Veritabanı
+.env
+agent_memory.db
+
+# Yedekler ve Çöpler
+silinenler/
+__pycache__/
+*.pyc
+
+# Modeller ve İndeksler
+models/
+data/chromadb/

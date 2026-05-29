@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     COQUI_VOICE_REF_AUDIO: str = "./models/coqui_reference.wav"
     COQUI_SPEAKER_WAV: str = ""
     COQUI_USE_GPU: bool = True
+    COQUI_SERVER_HOST: str = "127.0.0.1"
+    COQUI_SERVER_PORT: int = 8001
 
     # Edge TTS (Microsoft Edge online TTS, free, no API key)
     TTS_ENABLE_EDGE_FALLBACK: bool = True
@@ -321,6 +323,8 @@ except Exception as e:
         )
         COQUI_SPEAKER_WAV: str = os.getenv("COQUI_SPEAKER_WAV", "")
         COQUI_USE_GPU: bool = os.getenv("COQUI_USE_GPU", "true").lower() == "true"
+        COQUI_SERVER_HOST: str = os.getenv("COQUI_SERVER_HOST", "127.0.0.1")
+        COQUI_SERVER_PORT: int = int(os.getenv("COQUI_SERVER_PORT", "8001"))
 
         TTS_ENABLE_EDGE_FALLBACK: bool = (
             os.getenv("TTS_ENABLE_EDGE_FALLBACK", "true").lower() == "true"

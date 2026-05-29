@@ -2,7 +2,8 @@
 Tests for mock services (authentication and account services).
 """
 import pytest
-from infrastructure.mock_services import MockAuthService, MockAccountService
+
+from infrastructure.mock_services import MockAccountService, MockAuthService
 
 
 class TestMockAuthService:

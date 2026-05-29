@@ -3,8 +3,9 @@ Pytest configuration and conftest fixtures for Local Bank AI Agent tests.
 """
 import os
 import sys
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

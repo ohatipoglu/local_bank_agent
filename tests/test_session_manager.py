@@ -2,9 +2,14 @@
 Tests for session management module.
 """
 import time
+
 import pytest
-from core.session_manager import SessionManager, SessionState
-from core.exceptions import SessionError, AuthenticationError
+
+import os
+import shutil
+import tempfile
+from core.exceptions import AuthenticationError, SessionError
+from core.session_manager_persistent import SQLiteSessionManager, SessionState
 
 
 class TestSessionState:
@@ -42,103 +47,141 @@ class TestSessionManager:
     @pytest.fixture
     def manager(self):
         """Create a fresh session manager."""
-        return SessionManager(ttl_seconds=60, max_sessions=10)
+        temp_dir = tempfile.mkdtemp()
+        db_path = os.path.join(temp_dir, "sessions_test.db")
+        mgr = SQLiteSessionManager(db_path=db_path, ttl_seconds=60, max_sessions=10)
+        yield mgr
+        # Cleanup
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(mgr.close())
+            else:
+                loop.run_until_complete(mgr.close())
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception:
+            pass
 
-    def test_create_session(self, manager):
+    @pytest.mark.asyncio
+    async def test_create_session(self, manager):
         """Test creating a new session."""
-        session = manager.create_session("sess-1")
+        session = await manager.create_session("sess-1")
         assert session.session_id == "sess-1"
         assert not session.is_authenticated
 
-    def test_get_session(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_session(self, manager):
         """Test retrieving a session."""
-        manager.create_session("sess-1")
-        session = manager.get_session("sess-1")
+        await manager.create_session("sess-1")
+        session = await manager.get_session("sess-1")
         assert session is not None
         assert session.session_id == "sess-1"
 
-    def test_get_nonexistent_session(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_nonexistent_session(self, manager):
         """Test retrieving a session that doesn't exist."""
-        session = manager.get_session("does-not-exist")
+        session = await manager.get_session("does-not-exist")
         assert session is None
 
-    def test_delete_session(self, manager):
+    @pytest.mark.asyncio
+    async def test_delete_session(self, manager):
         """Test deleting a session."""
-        manager.create_session("sess-1")
-        assert manager.delete_session("sess-1") is True
-        assert manager.get_session("sess-1") is None
+        await manager.create_session("sess-1")
+        assert await manager.delete_session("sess-1") is True
+        assert await manager.get_session("sess-1") is None
 
-    def test_delete_nonexistent_session(self, manager):
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_session(self, manager):
         """Test deleting a session that doesn't exist."""
-        assert manager.delete_session("does-not-exist") is False
+        assert await manager.delete_session("does-not-exist") is False
 
-    def test_session_max_limit(self):
+    @pytest.mark.asyncio
+    async def test_session_max_limit(self):
         """Test maximum session limit enforcement."""
-        manager = SessionManager(ttl_seconds=60, max_sessions=2)
-        manager.create_session("sess-1")
-        manager.create_session("sess-2")
+        temp_dir = tempfile.mkdtemp()
+        db_path = os.path.join(temp_dir, "sessions_test.db")
+        try:
+            manager = SQLiteSessionManager(db_path=db_path, ttl_seconds=60, max_sessions=2)
+            await manager.create_session("sess-1")
+            await manager.create_session("sess-2")
 
-        with pytest.raises(SessionError, match="Maximum session limit reached"):
-            manager.create_session("sess-3")
+            with pytest.raises(SessionError, match="Maximum session limit reached"):
+                await manager.create_session("sess-3")
+        finally:
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
 
-    def test_session_expiry_cleanup(self, manager):
+    @pytest.mark.asyncio
+    async def test_session_expiry_cleanup(self, manager):
         """Test expired session automatic cleanup."""
-        session = manager.create_session("sess-1")
-        # Manually expire it
-        session.last_accessed = time.time() - 120
+        await manager.create_session("sess-1")
+        # Manually expire it in SQLite database
+        async with manager._transaction() as conn:
+            await conn.execute("UPDATE sessions SET last_accessed = ? WHERE session_id = ?", (time.time() - 120, "sess-1"))
 
         # Get should return None and clean up
-        result = manager.get_session("sess-1")
+        result = await manager.get_session("sess-1")
         assert result is None
 
-    def test_authenticate_session(self, manager, test_customer_id):
+    @pytest.mark.asyncio
+    async def test_authenticate_session(self, manager, test_customer_id):
         """Test authenticating a session with customer ID."""
-        manager.create_session("sess-1")
-        result = manager.authenticate_session("sess-1", test_customer_id)
+        await manager.create_session("sess-1")
+        result = await manager.authenticate_session("sess-1", test_customer_id)
         assert result is True
 
-        session = manager.get_session("sess-1")
+        session = await manager.get_session("sess-1")
         assert session.is_authenticated is True
         assert session.customer_id == test_customer_id
 
-    def test_authenticate_invalid_session(self, manager, test_customer_id):
+    @pytest.mark.asyncio
+    async def test_authenticate_invalid_session(self, manager, test_customer_id):
         """Test authenticating a non-existent session."""
         with pytest.raises(SessionError, match="Session not found"):
-            manager.authenticate_session("nonexistent", test_customer_id)
+            await manager.authenticate_session("nonexistent", test_customer_id)
 
-    def test_authenticate_invalid_customer_id(self, manager):
+    @pytest.mark.asyncio
+    async def test_authenticate_invalid_customer_id(self, manager):
         """Test authenticating with invalid customer ID."""
-        manager.create_session("sess-1")
+        await manager.create_session("sess-1")
 
         # Too short
         with pytest.raises(AuthenticationError):
-            manager.authenticate_session("sess-1", "123")
+            await manager.authenticate_session("sess-1", "123")
 
         # Non-numeric
         with pytest.raises(AuthenticationError):
-            manager.authenticate_session("sess-1", "abcdefghijk")
+            await manager.authenticate_session("sess-1", "abcdefghijk")
 
-    def test_update_context(self, manager):
+    @pytest.mark.asyncio
+    async def test_update_context(self, manager):
         """Test updating conversation context."""
-        manager.create_session("sess-1")
-        manager.update_context("sess-1", "last_intent", "balance_inquiry")
-        
-        value = manager.get_context("sess-1", "last_intent")
+        await manager.create_session("sess-1")
+        await manager.update_context("sess-1", "last_intent", "balance_inquiry")
+
+        value = await manager.get_context("sess-1", "last_intent")
         assert value == "balance_inquiry"
 
-    def test_get_context_default(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_context_default(self, manager):
         """Test getting context with default value."""
-        manager.create_session("sess-1")
-        value = manager.get_context("sess-1", "missing_key", "default_value")
+        await manager.create_session("sess-1")
+        value = await manager.get_context("sess-1", "missing_key", "default_value")
         assert value == "default_value"
 
-    def test_get_stats(self, manager, test_customer_id):
+    @pytest.mark.asyncio
+    async def test_get_stats(self, manager, test_customer_id):
         """Test session statistics."""
-        manager.create_session("sess-1")
-        manager.create_session("sess-2")
-        manager.authenticate_session("sess-1", test_customer_id)
+        await manager.create_session("sess-1")
+        await manager.create_session("sess-2")
+        await manager.authenticate_session("sess-1", test_customer_id)
 
-        stats = manager.get_stats()
+        stats = await manager.get_stats()
         assert stats["active_sessions"] == 2
         assert stats["authenticated_sessions"] == 1
         assert stats["max_sessions"] == 10
