@@ -176,14 +176,14 @@ refactor: extract TTS engine interface
 - [ ] Database-backed mock services
 - [ ] OpenTelemetry integration
 - [ ] Kubernetes manifests
-- [ ] API versioning (/api/v1/)
+- [x] API versioning (/api/v1/)
 
 ### Medium Priority
 - [ ] Multi-language support (i18n)
 - [ ] Conversation export functionality
 - [ ] User feedback mechanism
 - [ ] Performance benchmarks
-- [ ] Load testing scripts
+- [x] Load testing scripts
 
 ### Good First Issues
 - [ ] Additional test coverage
